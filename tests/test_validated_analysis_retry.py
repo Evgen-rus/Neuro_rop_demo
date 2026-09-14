@@ -22,7 +22,11 @@ from openai_api.llm.llm_client import (
 )
 from openai_api.llm.analyze_deal import build_prompt as deal_prompt
 from openai_api.llm.analyze_lead import build_prompt as lead_prompt, validate_lead_analysis_for_crm_state
-from openai_api.llm.full_analysis_repair import build_full_repair_builder, SectionRepairError
+from openai_api.llm.full_analysis_repair import (
+    SectionRepairError,
+    build_continuity_repair_plan,
+    build_full_repair_builder,
+)
 from openai_api.llm.deal_semantic_dependencies import DEPENDENCIES
 from openai_api.llm.validation import (
     AnalysisValidationError, DEAL_REQUIRED_FIELDS, normalize_analysis_for_validation, validate_deal_analysis,
@@ -370,6 +374,30 @@ class FullSectionRepairTests(unittest.TestCase):
         self.assertEqual(meta["semantic_attempt_count"], 1)
         self.assertFalse(meta["repair_invoked"])
         self.assertFalse(meta["primary_validation_failed"])
+
+    def test_continuity_repair_packet_is_bounded_and_can_restore_baseline_item(self):
+        candidate = deepcopy(self.good)
+        baseline = deepcopy(self.good)
+        candidate["deal_context"]["commitments"] = [{"commitment_id": "c17", "status": "done"}]
+        baseline["deal_context"]["commitments"] = [{"commitment_id": "c17", "status": "open"}]
+        error = AnalysisValidationError(
+            "Invalid deal analysis continuity: closed unresolved commitment without new evidence: c17",
+            errors=["closed unresolved commitment without new evidence: c17"],
+        )
+        plan = build_continuity_repair_plan(
+            self.prompt,
+            candidate,
+            error,
+            baseline={"analysis": baseline},
+            changed_evidence_ids=[],
+        )
+        self.assertIsNotNone(plan)
+        self.assertNotIn("FULL_HISTORY_SENTINEL", plan.prompt)
+        self.assertNotIn("FULL_TRANSCRIPT_SENTINEL", plan.prompt)
+        sections = {key: deepcopy(candidate[key]) for key in plan.sections}
+        sections["deal_context"]["commitments"] = deepcopy(baseline["deal_context"]["commitments"])
+        repaired = plan.merge({"sections": sections})
+        self.assertEqual(repaired["deal_context"]["commitments"][0]["status"], "open")
 
     def test_local_repair_excludes_full_context_and_preserves_primary(self):
         snapshot = deepcopy(self.bad)

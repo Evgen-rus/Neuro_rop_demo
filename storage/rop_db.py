@@ -83,6 +83,7 @@ DEAL_ANALYSIS_PURGE_QUERIES: tuple[tuple[str, str], ...] = (
     ),
     ("ui_reports", "DELETE FROM ui_reports WHERE entity_type = 'deal'"),
     ("mini_recommendations", "DELETE FROM mini_recommendations WHERE entity_type = 'deal'"),
+    ("deal_semantic_failures", "DELETE FROM deal_semantic_failures"),
     ("analysis_runs", "DELETE FROM analysis_runs WHERE entity_type = 'deal'"),
     ("entity_memory", "DELETE FROM entity_memory WHERE entity_type = 'deal'"),
     ("entity_state", "DELETE FROM entity_state WHERE entity_type = 'deal'"),
@@ -269,6 +270,16 @@ def _init_db_unlocked(db_path: str | Path) -> None:
                 canonical_fingerprint TEXT,
                 canonical_state_json TEXT,
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS deal_semantic_failures (
+                deal_id TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                trusted_baseline_run_id INTEGER NOT NULL,
+                error_type TEXT NOT NULL,
+                continuity_errors_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (deal_id, fingerprint, trusted_baseline_run_id)
             );
 
             CREATE TABLE IF NOT EXISTS entity_memory (
@@ -2275,6 +2286,62 @@ def _upsert_entity_state(conn: sqlite3.Connection, **state: Any) -> None:
                 state.get("last_risk_level"),
                 dumps_json(state.get("last_analysis")) if state.get("last_analysis") is not None else None,
                 dumps_json(state.get("last_recommendation")) if state.get("last_recommendation") is not None else None,
+                utcish_now(),
+            ),
+        )
+
+
+def get_deal_semantic_failure(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    fingerprint: str,
+    trusted_baseline_run_id: int,
+) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM deal_semantic_failures
+            WHERE deal_id = ? AND fingerprint = ? AND trusted_baseline_run_id = ?
+            """,
+            (str(deal_id), str(fingerprint), int(trusted_baseline_run_id)),
+        ).fetchone()
+    if row is None:
+        return None
+    value = dict(row)
+    value["continuity_errors"] = loads_json(value.pop("continuity_errors_json"), [])
+    return value
+
+
+def save_deal_semantic_failure(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    fingerprint: str,
+    trusted_baseline_run_id: int,
+    error_type: str,
+    continuity_errors: list[str],
+) -> None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO deal_semantic_failures (
+                deal_id, fingerprint, trusted_baseline_run_id,
+                error_type, continuity_errors_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(deal_id, fingerprint, trusted_baseline_run_id) DO UPDATE SET
+                error_type = excluded.error_type,
+                continuity_errors_json = excluded.continuity_errors_json,
+                created_at = excluded.created_at
+            """,
+            (
+                str(deal_id),
+                str(fingerprint),
+                int(trusted_baseline_run_id),
+                str(error_type),
+                dumps_json([str(item) for item in continuity_errors]),
                 utcish_now(),
             ),
         )

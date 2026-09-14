@@ -589,6 +589,8 @@ class CrmChangeGateTests(unittest.TestCase):
         self.assertFalse(deal_job_can_acknowledge(
             {"publish_ready": True, "status": "error", "decision_status": "error"}))
         self.assertTrue(deal_job_can_acknowledge(
+            {"publish_ready": True, "semantic_consumed": True, "status": "error", "decision_status": "error"}))
+        self.assertTrue(deal_job_can_acknowledge(
             {"publish_ready": True, "status": "done", "decision_status": "skip"}))
         self.assertTrue(deal_job_can_acknowledge({"stage": "audio_idle", "status": "done"}))
 

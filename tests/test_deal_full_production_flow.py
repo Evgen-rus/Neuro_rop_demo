@@ -115,6 +115,8 @@ class DealFullProductionFlowTests(unittest.TestCase):
                 patch.object(analyze_deal_if_changed, "build_deal_snapshot", return_value={"deal": {}}),
                 patch.object(analyze_deal_if_changed, "fingerprint_snapshot", return_value="new"),
                 patch.object(analyze_deal_if_changed, "get_entity_state", return_value={"snapshot": {}, "last_analysis": {}}),
+                patch.object(analyze_deal_if_changed, "get_trusted_deal_baseline", return_value=None),
+                patch.object(analyze_deal_if_changed, "get_deal_semantic_failure", return_value=None),
                 patch.object(analyze_deal_if_changed, "compare_snapshots", return_value=decision.diff),
                 patch.object(analyze_deal_if_changed, "get_entity_memory", return_value=None),
                 patch.object(analyze_deal_if_changed, "decide_deal_processing", return_value=decision),

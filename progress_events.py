@@ -61,6 +61,7 @@ def emit_progress(
     max_attempts: int | None = None,
     error: str | None = None,
     publish_ready: bool = False,
+    semantic_consumed: bool = False,
     analysis_run_id: int | None = None,
     decision_status: str | None = None,
 ) -> dict[str, Any]:
@@ -81,6 +82,8 @@ def emit_progress(
     # уже полученный publish_ready при слиянии progress в JobState.
     if publish_ready:
         payload["publish_ready"] = True
+    if semantic_consumed:
+        payload["semantic_consumed"] = True
     if analysis_run_id is not None:
         payload["analysis_run_id"] = int(analysis_run_id)
     compact = compact_decision_status(decision_status)

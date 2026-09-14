@@ -133,9 +133,11 @@ def record_activity_probe(db_path: str | Path, deal_id: str, now: datetime) -> N
 
 
 def deal_job_can_acknowledge(progress: dict | None) -> bool:
-    """Ack only after a terminal deal decision or audio idle, never after a failed analysis."""
+    """Ack terminal input consumption independently from report publication."""
     row = progress or {}
     if row.get("stage") == "audio_idle" and row.get("status") == "done":
+        return True
+    if row.get("semantic_consumed") is True and row.get("publish_ready") is True:
         return True
     if row.get("publish_ready") is True and row.get("status") != "error":
         from progress_events import compact_decision_status

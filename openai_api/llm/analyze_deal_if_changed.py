@@ -52,7 +52,12 @@ from openai_api.llm.analyze_deal import (
     resolve_history_path,
     transcript_text_for_prompt,
 )
-from openai_api.config import DEAL_INCREMENTAL_ANALYSIS_ENABLED
+from openai_api.config import (
+    ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS,
+    ANALYSIS_REPAIR_MODEL,
+    ANALYSIS_REPAIR_REASONING_EFFORT,
+    DEAL_INCREMENTAL_ANALYSIS_ENABLED,
+)
 from openai_api.llm.deal_evidence import (
     collect_deal_evidence,
     coverage_for_included_evidence,
@@ -61,9 +66,13 @@ from openai_api.llm.deal_evidence import (
     mentionable_audio_reference_ids,
 )
 from openai_api.llm.trusted_baseline import get_trusted_deal_baseline
+from openai_api.llm.full_analysis_repair import SectionRepairError, build_continuity_repair_plan
+from openai_api.llm.llm_client import ModelJsonParseError, call_analysis_json
 from openai_api.llm.validation import (
     AnalysisValidationError,
     continuity_errors_are_repairable,
+    normalize_analysis_for_validation,
+    validate_deal_analysis,
     validate_deal_analysis_continuity,
 )
 from openai_api.change_detection.snapshot import (
@@ -78,6 +87,7 @@ from progress_events import compact_decision_status, emit_progress
 from setup import BASE_DIR, get_logger
 from storage.rop_db import (
     DEFAULT_DB_PATH,
+    get_deal_semantic_failure,
     get_today_mini_trigger_types,
     get_entity_memory,
     get_entity_state,
@@ -85,6 +95,7 @@ from storage.rop_db import (
     merge_deal_daily_quality_state,
     publish_analysis_run,
     save_analysis_run,
+    save_deal_semantic_failure,
     save_mini_recommendation,
     upsert_entity_state,
     utcish_now,
@@ -311,6 +322,7 @@ def analysis_paths(current_deal_dir: Path, deal_id: str) -> dict[str, Path]:
         "mini": analysis_dir / f"deal_{deal_id}_mini_recommendation.md",
         "incremental": analysis_dir / f"deal_{deal_id}_incremental_context.json",
         "continuity": analysis_dir / f"deal_{deal_id}_continuity_baseline.json",
+        "prompt": analysis_dir / f"deal_{deal_id}_request_prompt.txt",
     }
 
 
@@ -393,6 +405,112 @@ def _continuity_changed_evidence_ids(
         return []
     delta, _ = evidence_delta(available_evidence, previous_coverage)
     return [str(item["evidence_id"]) for item in delta if item.get("evidence_id") is not None]
+
+
+def repair_continuity_candidate(
+    *,
+    args: argparse.Namespace,
+    paths: dict[str, Path],
+    error: AnalysisValidationError,
+    baseline: dict[str, Any],
+    changed_evidence_ids: list[str],
+    available_evidence_ids: list[str] | None,
+    enforce_confirmation_evidence: bool,
+) -> None:
+    payload = load_analysis_payload(paths["analysis"])
+    candidate = extract_analysis(payload)
+    plan = build_continuity_repair_plan(
+        read_text(paths["prompt"]),
+        candidate,
+        error,
+        baseline=baseline,
+        changed_evidence_ids=changed_evidence_ids,
+    )
+    if plan is None:
+        raise SectionRepairError("continuity error is not safely repairable as bounded sections")
+    response, metadata = call_analysis_json(
+        plan.prompt,
+        model=ANALYSIS_REPAIR_MODEL,
+        reasoning_effort=ANALYSIS_REPAIR_REASONING_EFFORT,
+        max_output_tokens=ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS,
+        call_type="deal_continuity_repair",
+        preview_prompt=False,
+        preview_response_errors=False,
+        trace_entity_type="deal",
+        trace_entity_id=str(args.deal_id),
+    )
+    repaired = plan.merge(response)
+    normalize_analysis_for_validation(repaired)
+    if set(repaired) - set(candidate) - set(plan.sections) or any(
+        repaired.get(key) != value for key, value in candidate.items() if key not in plan.sections
+    ):
+        raise SectionRepairError("continuity normalization changed a section outside repair scope")
+    validate_deal_analysis(repaired)
+    validate_deal_analysis_continuity(
+        repaired,
+        baseline,
+        available_evidence_ids=available_evidence_ids,
+        changed_evidence_ids=changed_evidence_ids,
+        enforce_confirmation_evidence=enforce_confirmation_evidence,
+    )
+    payload["analysis"] = repaired
+    payload.setdefault("model_metadata", {})["continuity_repair"] = {
+        key: value for key, value in metadata.items() if key != "raw_output_text"
+    }
+    save_json(paths["analysis"], payload)
+    _, diagnostics, _ = load_context_diagnostics_for_analysis(
+        entity_type="deal",
+        entity_id=str(args.deal_id),
+        workspace_root=Path(args.deal_root),
+    )
+    paths["report"].write_text(render_report(repaired, payload.get("model_metadata"), diagnostics), encoding="utf-8")
+
+
+def persist_terminal_continuity_failure(
+    *,
+    db_path: Path,
+    args: argparse.Namespace,
+    fingerprint: str,
+    baseline_run_id: int,
+    continuity_error: AnalysisValidationError,
+    failure: BaseException,
+) -> int:
+    continuity_errors = [str(item) for item in continuity_error.errors] or [str(continuity_error)]
+    save_deal_semantic_failure(
+        db_path,
+        deal_id=str(args.deal_id),
+        fingerprint=fingerprint,
+        trusted_baseline_run_id=baseline_run_id,
+        error_type=type(failure).__name__,
+        continuity_errors=continuity_errors,
+    )
+    return save_analysis_run(
+        db_path,
+        entity_type="deal",
+        entity_id=str(args.deal_id),
+        status="SEMANTIC_FAILURE",
+        fingerprint=fingerprint,
+        model=args.model,
+        prompt_version=DEAL_PROMPT_CACHE_KEY,
+        logic_version="change-aware-v1",
+        provenance={"trigger": "continuity_failure", "trusted_baseline_run_id": baseline_run_id},
+        error=f"{type(failure).__name__}: {failure}; continuity: {'; '.join(continuity_errors)}",
+    )
+
+
+def emit_semantic_failure(deal_id: str, *, analysis_run_id: int, error: BaseException) -> None:
+    emit_progress(
+        "deal",
+        str(deal_id),
+        "error",
+        status="error",
+        detail="Вход обработан, отчёт отклонён continuity validation",
+        error=str(error),
+        publish_ready=True,
+        semantic_consumed=True,
+        analysis_run_id=analysis_run_id,
+        decision_status=ERROR,
+    )
 
 
 def persist_successful_llm_run(
@@ -610,13 +728,8 @@ def stage5_inputs(
     deal_id: str,
     raw_bundle: dict[str, Any],
     current_deal_dir: Path,
+    baseline: dict[str, Any] | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
-    baseline = get_trusted_deal_baseline(
-        db_path,
-        deal_id,
-        compatible_prompt_versions=COMPATIBLE_DEAL_PROMPT_VERSIONS,
-        expected_logic_version="change-aware-v1",
-    )
     canonical_state, canonical_delta = merge_deal_bundle(
         (baseline or {}).get("canonical_state"),
         raw_bundle,
@@ -708,6 +821,22 @@ def main() -> None:
         )
         fingerprint = fingerprint_snapshot(snapshot)
         previous_state = get_entity_state(db_path, "deal", str(args.deal_id))
+        baseline = get_trusted_deal_baseline(
+            db_path,
+            str(args.deal_id),
+            compatible_prompt_versions=COMPATIBLE_DEAL_PROMPT_VERSIONS,
+            expected_logic_version="change-aware-v1",
+        )
+        suppression = (
+            get_deal_semantic_failure(
+                db_path,
+                deal_id=str(args.deal_id),
+                fingerprint=fingerprint,
+                trusted_baseline_run_id=int(baseline["analysis_run_id"]),
+            )
+            if baseline is not None and not args.force_llm
+            else None
+        )
         previous_snapshot = (previous_state or {}).get("snapshot")
         diff = compare_snapshots(previous_snapshot, snapshot)
         last_memory = get_entity_memory(db_path, "deal", str(args.deal_id))
@@ -725,6 +854,13 @@ def main() -> None:
                 triggers=[],
                 diff=diff,
             )
+        elif suppression is not None:
+            decision = ProcessingDecision(
+                status=SKIPPED_NO_CHANGES,
+                reasons=["Этот snapshot уже завершился terminal continuity failure для текущего trusted baseline."],
+                triggers=[],
+                diff=diff,
+            )
 
         if args.dry_run_decision:
             print(json.dumps(decision.as_dict(), ensure_ascii=False, indent=2))
@@ -733,7 +869,27 @@ def main() -> None:
             return
 
         save_json(paths["snapshot"], {"fingerprint": fingerprint, "snapshot": snapshot, "diff": diff})
-        baseline = None
+        if suppression is not None:
+            run_id = save_analysis_run(
+                db_path,
+                entity_type="deal",
+                entity_id=str(args.deal_id),
+                status="SEMANTIC_FAILURE_SUPPRESSED",
+                fingerprint=fingerprint,
+                decision_reason=decision.as_dict(),
+                logic_version="change-aware-v1",
+                provenance={
+                    "trigger": "semantic_failure_suppressed",
+                    "trusted_baseline_run_id": baseline["analysis_run_id"],
+                },
+            )
+            emit_deal_publish_ready(
+                str(args.deal_id),
+                analysis_run_id=run_id,
+                engine_status=SKIPPED_NO_CHANGES,
+            )
+            print(f"{SKIPPED_NO_CHANGES}: terminal semantic failure suppressed for deal {args.deal_id}")
+            return
         canonical_state = canonical_delta = None
         available_evidence: list[dict[str, Any]] = []
         if decision.status in {FIRST_FULL_ANALYSIS, FULL_LLM_ANALYSIS, INCREMENTAL_LLM_ANALYSIS}:
@@ -742,6 +898,7 @@ def main() -> None:
                 deal_id=str(args.deal_id),
                 raw_bundle=raw_bundle,
                 current_deal_dir=current_deal_dir,
+                baseline=baseline,
             )
         full_decision_reason: dict[str, Any] | None = None
         incremental_blocker = None
@@ -831,6 +988,16 @@ def main() -> None:
                             "changed_entity_count": len(context["CRM_SEMANTIC_DELTA"]),
                             "evidence_delta_count": len(context["NEW_OR_REVISED_CLIENT_EVIDENCE"]),
                         }
+                        continuity_changed_ids = [
+                            str(item["evidence_id"])
+                            for item in context["NEW_OR_REVISED_CLIENT_EVIDENCE"]
+                            if item.get("evidence_id") is not None
+                        ]
+                        continuity_available_ids = mentionable_audio_reference_ids(
+                            canonical_state=canonical_state,
+                            manifest_calls=load_deal_audio_manifest_calls(args.deal_root, str(args.deal_id)),
+                            available_evidence=available_evidence,
+                        )
                         persist_kwargs = {
                             "db_path": db_path,
                             "args": args,
@@ -844,11 +1011,7 @@ def main() -> None:
                             "canonical_state": canonical_state,
                             "available_evidence": available_evidence,
                             "continuity_baseline": baseline,
-                            "changed_evidence_ids": [
-                                str(item["evidence_id"])
-                                for item in context["NEW_OR_REVISED_CLIENT_EVIDENCE"]
-                                if item.get("evidence_id") is not None
-                            ],
+                            "changed_evidence_ids": continuity_changed_ids,
                         }
                         try:
                             run_id = persist_successful_llm_run(**persist_kwargs)
@@ -858,40 +1021,32 @@ def main() -> None:
                                 incremental_error,
                             )
                             if continuity_errors_are_repairable(incremental_error):
-                                logger.warning(
-                                    "Incremental continuity gate failed; running one bounded correction"
-                                )
+                                logger.warning("Incremental continuity gate failed; running one targeted repair")
                                 try:
-                                    run_existing_analyzer(
-                                        args,
-                                        analyzer_transcript_arg,
-                                        incremental_context=paths["incremental"],
-                                        continuity_correction=True,
-                                        db_path=db_path,
+                                    repair_continuity_candidate(
+                                        args=args,
+                                        paths=paths,
+                                        error=incremental_error,
+                                        baseline=baseline,
+                                        changed_evidence_ids=continuity_changed_ids,
+                                        available_evidence_ids=continuity_available_ids,
+                                        enforce_confirmation_evidence=True,
                                     )
                                     run_id = persist_successful_llm_run(**persist_kwargs)
-                                except AnalysisValidationError as second_error:
-                                    logger.warning(
-                                        "Incremental continuity correction was rejected; running one FULL_REBUILD: %s",
-                                        second_error,
+                                except (AnalysisValidationError, SectionRepairError, ModelJsonParseError) as second_error:
+                                    logger.warning("Incremental targeted continuity repair was rejected: %s", second_error)
+                                    failure_run_id = persist_terminal_continuity_failure(
+                                        db_path=db_path,
+                                        args=args,
+                                        fingerprint=fingerprint,
+                                        baseline_run_id=int(baseline["analysis_run_id"]),
+                                        continuity_error=incremental_error,
+                                        failure=second_error,
                                     )
-                                    full_decision_reason = {
-                                        **decision.as_dict(),
-                                        "fallback": True,
-                                        "fallback_reason": "incremental_execution_failed",
-                                        "baseline_run_id": baseline["analysis_run_id"],
-                                    }
-                                except Exception as second_error:
-                                    logger.warning(
-                                        "Incremental continuity correction failed; running one FULL_REBUILD: %s",
-                                        type(second_error).__name__,
+                                    emit_semantic_failure(
+                                        str(args.deal_id), analysis_run_id=failure_run_id, error=second_error
                                     )
-                                    full_decision_reason = {
-                                        **decision.as_dict(),
-                                        "fallback": True,
-                                        "fallback_reason": "incremental_execution_failed",
-                                        "baseline_run_id": baseline["analysis_run_id"],
-                                    }
+                                    return
                                 else:
                                     emit_deal_publish_ready(
                                         str(args.deal_id),
@@ -904,15 +1059,21 @@ def main() -> None:
                                     return
                             else:
                                 logger.warning(
-                                    "Incremental deal analysis was rejected before publication; running one FULL_REBUILD: %s",
+                                    "Incremental continuity rejection is not safely repairable: %s",
                                     incremental_error,
                                 )
-                                full_decision_reason = {
-                                    **decision.as_dict(),
-                                    "fallback": True,
-                                    "fallback_reason": "incremental_execution_failed",
-                                    "baseline_run_id": baseline["analysis_run_id"],
-                                }
+                                failure_run_id = persist_terminal_continuity_failure(
+                                    db_path=db_path,
+                                    args=args,
+                                    fingerprint=fingerprint,
+                                    baseline_run_id=int(baseline["analysis_run_id"]),
+                                    continuity_error=incremental_error,
+                                    failure=incremental_error,
+                                )
+                                emit_semantic_failure(
+                                    str(args.deal_id), analysis_run_id=failure_run_id, error=incremental_error
+                                )
+                                return
                         else:
                             emit_deal_publish_ready(
                                 str(args.deal_id),
@@ -963,18 +1124,36 @@ def main() -> None:
             }
             try:
                 run_id = persist_successful_llm_run(**persist_kwargs)
-            except AnalysisValidationError:
+            except AnalysisValidationError as continuity_error:
                 if continuity_path is None:
                     raise
-                logger.warning("FULL deal analysis rejected by continuity gate; running one bounded correction")
-                run_existing_analyzer(
-                    args,
-                    analyzer_transcript_arg,
-                    continuity_baseline=continuity_path,
-                    continuity_correction=True,
-                    db_path=db_path,
-                )
-                run_id = persist_successful_llm_run(**persist_kwargs)
+                logger.warning("FULL deal analysis rejected by continuity gate; running one targeted repair")
+                changed_evidence_ids = _continuity_changed_evidence_ids(available_evidence, baseline)
+                try:
+                    repair_continuity_candidate(
+                        args=args,
+                        paths=paths,
+                        error=continuity_error,
+                        baseline=baseline,
+                        changed_evidence_ids=changed_evidence_ids,
+                        available_evidence_ids=None,
+                        enforce_confirmation_evidence=False,
+                    )
+                    run_id = persist_successful_llm_run(**persist_kwargs)
+                except (AnalysisValidationError, SectionRepairError, ModelJsonParseError) as second_error:
+                    logger.warning("FULL targeted continuity repair was rejected: %s", second_error)
+                    failure_run_id = persist_terminal_continuity_failure(
+                        db_path=db_path,
+                        args=args,
+                        fingerprint=fingerprint,
+                        baseline_run_id=int(baseline["analysis_run_id"]),
+                        continuity_error=continuity_error,
+                        failure=second_error,
+                    )
+                    emit_semantic_failure(
+                        str(args.deal_id), analysis_run_id=failure_run_id, error=second_error
+                    )
+                    return
             emit_deal_publish_ready(
                 str(args.deal_id),
                 analysis_run_id=run_id,
