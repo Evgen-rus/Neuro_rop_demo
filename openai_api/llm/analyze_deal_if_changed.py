@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -398,13 +399,56 @@ def _continuity_changed_evidence_ids(
     available_evidence: list[dict[str, Any]] | None,
     baseline: dict[str, Any] | None,
 ) -> list[str]:
+    return [str(item["evidence_id"]) for item in _continuity_changed_evidence(available_evidence, baseline)]
+
+
+def _continuity_changed_evidence(
+    available_evidence: list[dict[str, Any]] | None,
+    baseline: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
     if not available_evidence or not isinstance(baseline, dict):
         return []
     previous_coverage = baseline.get("evidence_coverage")
     if not isinstance(previous_coverage, dict):
         return []
     delta, _ = evidence_delta(available_evidence, previous_coverage)
-    return [str(item["evidence_id"]) for item in delta if item.get("evidence_id") is not None]
+    return [item for item in delta if item.get("evidence_id") is not None]
+
+
+def archive_rejected_candidate(
+    *,
+    paths: dict[str, Path],
+    deal_id: str,
+    fingerprint: str,
+    baseline_run_id: int,
+    stage: str,
+    error: AnalysisValidationError,
+    changed_evidence_ids: list[str],
+    candidate: dict[str, Any],
+) -> Path:
+    rejected_dir = paths["analysis"].parent / "rejected"
+    rejected_dir.mkdir(parents=True, exist_ok=True)
+    target = rejected_dir / f"{time.time_ns()}_{stage}.json"
+    save_json(target, {
+        "deal_id": str(deal_id),
+        "fingerprint": fingerprint,
+        "trusted_baseline_run_id": int(baseline_run_id),
+        "timestamp": utcish_now(),
+        "stage": stage,
+        "continuity_errors": [str(item) for item in error.errors] or [str(error)],
+        "changed_evidence_ids": [str(item) for item in changed_evidence_ids],
+        "candidate": candidate,
+    })
+    return target
+
+
+def archive_current_rejected_candidate(**kwargs: Any) -> Path | None:
+    try:
+        payload = load_analysis_payload(kwargs["paths"]["analysis"])
+        return archive_rejected_candidate(candidate=extract_analysis(payload), **kwargs)
+    except (OSError, ValueError, TypeError) as archive_error:
+        logger.warning("Could not archive continuity-rejected candidate: %s", type(archive_error).__name__)
+        return None
 
 
 def repair_continuity_candidate(
@@ -413,7 +457,9 @@ def repair_continuity_candidate(
     paths: dict[str, Path],
     error: AnalysisValidationError,
     baseline: dict[str, Any],
+    fingerprint: str,
     changed_evidence_ids: list[str],
+    new_evidence: list[dict[str, Any]],
     available_evidence_ids: list[str] | None,
     enforce_confirmation_evidence: bool,
 ) -> None:
@@ -425,6 +471,7 @@ def repair_continuity_candidate(
         error,
         baseline=baseline,
         changed_evidence_ids=changed_evidence_ids,
+        new_evidence=new_evidence,
     )
     if plan is None:
         raise SectionRepairError("continuity error is not safely repairable as bounded sections")
@@ -440,19 +487,32 @@ def repair_continuity_candidate(
         trace_entity_id=str(args.deal_id),
     )
     repaired = plan.merge(response)
-    normalize_analysis_for_validation(repaired)
-    if set(repaired) - set(candidate) - set(plan.sections) or any(
-        repaired.get(key) != value for key, value in candidate.items() if key not in plan.sections
-    ):
-        raise SectionRepairError("continuity normalization changed a section outside repair scope")
-    validate_deal_analysis(repaired)
-    validate_deal_analysis_continuity(
-        repaired,
-        baseline,
-        available_evidence_ids=available_evidence_ids,
-        changed_evidence_ids=changed_evidence_ids,
-        enforce_confirmation_evidence=enforce_confirmation_evidence,
-    )
+    try:
+        normalize_analysis_for_validation(repaired)
+        if set(repaired) - set(candidate) - set(plan.sections) or any(
+            repaired.get(key) != value for key, value in candidate.items() if key not in plan.sections
+        ):
+            raise SectionRepairError("continuity normalization changed a section outside repair scope")
+        validate_deal_analysis(repaired)
+        validate_deal_analysis_continuity(
+            repaired,
+            baseline,
+            available_evidence_ids=available_evidence_ids,
+            changed_evidence_ids=changed_evidence_ids,
+            enforce_confirmation_evidence=enforce_confirmation_evidence,
+        )
+    except AnalysisValidationError as repair_error:
+        archive_rejected_candidate(
+            paths=paths,
+            deal_id=str(args.deal_id),
+            fingerprint=fingerprint,
+            baseline_run_id=int(baseline["analysis_run_id"]),
+            stage="repair",
+            error=repair_error,
+            changed_evidence_ids=changed_evidence_ids,
+            candidate=repaired,
+        )
+        raise
     payload["analysis"] = repaired
     payload.setdefault("model_metadata", {})["continuity_repair"] = {
         key: value for key, value in metadata.items() if key != "raw_output_text"
@@ -729,13 +789,19 @@ def stage5_inputs(
     raw_bundle: dict[str, Any],
     current_deal_dir: Path,
     baseline: dict[str, Any] | None,
+    normalized_communications: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     canonical_state, canonical_delta = merge_deal_bundle(
         (baseline or {}).get("canonical_state"),
         raw_bundle,
         observed_at=str(raw_bundle.get("generated_at") or utcish_now()),
     )
-    available_evidence = collect_deal_evidence(raw_bundle, current_deal_dir / "transcripts")
+    evidence_bundle = (
+        {**raw_bundle, "normalized_communications": normalized_communications}
+        if normalized_communications is not None
+        else raw_bundle
+    )
+    available_evidence = collect_deal_evidence(evidence_bundle, current_deal_dir / "transcripts")
     return baseline, canonical_state, canonical_delta, available_evidence
 
 
@@ -899,6 +965,7 @@ def main() -> None:
                 raw_bundle=raw_bundle,
                 current_deal_dir=current_deal_dir,
                 baseline=baseline,
+                normalized_communications=normalized_communications,
             )
         full_decision_reason: dict[str, Any] | None = None
         incremental_blocker = None
@@ -993,6 +1060,7 @@ def main() -> None:
                             for item in context["NEW_OR_REVISED_CLIENT_EVIDENCE"]
                             if item.get("evidence_id") is not None
                         ]
+                        continuity_changed_evidence = context["NEW_OR_REVISED_CLIENT_EVIDENCE"]
                         continuity_available_ids = mentionable_audio_reference_ids(
                             canonical_state=canonical_state,
                             manifest_calls=load_deal_audio_manifest_calls(args.deal_root, str(args.deal_id)),
@@ -1020,6 +1088,15 @@ def main() -> None:
                                 "Incremental deal analysis was rejected before publication: %s",
                                 incremental_error,
                             )
+                            archive_current_rejected_candidate(
+                                paths=paths,
+                                deal_id=str(args.deal_id),
+                                fingerprint=fingerprint,
+                                baseline_run_id=int(baseline["analysis_run_id"]),
+                                stage="primary",
+                                error=incremental_error,
+                                changed_evidence_ids=continuity_changed_ids,
+                            )
                             if continuity_errors_are_repairable(incremental_error):
                                 logger.warning("Incremental continuity gate failed; running one targeted repair")
                                 try:
@@ -1028,7 +1105,9 @@ def main() -> None:
                                         paths=paths,
                                         error=incremental_error,
                                         baseline=baseline,
+                                        fingerprint=fingerprint,
                                         changed_evidence_ids=continuity_changed_ids,
+                                        new_evidence=continuity_changed_evidence,
                                         available_evidence_ids=continuity_available_ids,
                                         enforce_confirmation_evidence=True,
                                     )
@@ -1128,14 +1207,26 @@ def main() -> None:
                 if continuity_path is None:
                     raise
                 logger.warning("FULL deal analysis rejected by continuity gate; running one targeted repair")
-                changed_evidence_ids = _continuity_changed_evidence_ids(available_evidence, baseline)
+                changed_evidence = _continuity_changed_evidence(available_evidence, baseline)
+                changed_evidence_ids = [str(item["evidence_id"]) for item in changed_evidence]
+                archive_current_rejected_candidate(
+                    paths=paths,
+                    deal_id=str(args.deal_id),
+                    fingerprint=fingerprint,
+                    baseline_run_id=int(baseline["analysis_run_id"]),
+                    stage="primary",
+                    error=continuity_error,
+                    changed_evidence_ids=changed_evidence_ids,
+                )
                 try:
                     repair_continuity_candidate(
                         args=args,
                         paths=paths,
                         error=continuity_error,
                         baseline=baseline,
+                        fingerprint=fingerprint,
                         changed_evidence_ids=changed_evidence_ids,
+                        new_evidence=changed_evidence,
                         available_evidence_ids=None,
                         enforce_confirmation_evidence=False,
                     )

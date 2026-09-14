@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from bitrix.customer_history import build_normalized_communications, is_confirmed_client_reply
+from bitrix.customer_history import build_deal_normalized_communications, is_confirmed_client_reply
 from openai_api.audio.transcript_context import AGGREGATE_STEM, transcript_items
 from openai_api.change_detection.snapshot import activity_kind, result_item, result_items, text_hash
 
@@ -84,12 +84,12 @@ def collect_deal_evidence(raw_bundle: dict[str, Any], transcripts_dir: Any) -> l
 
     communications = raw_bundle.get("normalized_communications")
     if not isinstance(communications, list):
-        communications = build_normalized_communications(raw_bundle)
+        communications = build_deal_normalized_communications(raw_bundle)
     for event in communications:
         if not isinstance(event, dict) or not is_confirmed_client_reply(event):
             continue
         source_ids = event.get("source_ids") if isinstance(event.get("source_ids"), list) else []
-        source_id = str(source_ids[0] if source_ids else "").strip()
+        source_id = next(filter(None, map(_digit_id, source_ids)), "")
         text = str(event.get("content") or "").strip()
         if not source_id or not text:
             continue

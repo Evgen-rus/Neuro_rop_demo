@@ -94,7 +94,8 @@ class DealEvidenceDeltaContractTests(unittest.TestCase):
     @patch("openai_api.llm.deal_evidence.transcript_items", return_value=[])
     def test_confirmed_inbound_messenger_mirror_is_evidence(self, _transcript_items) -> None:
         event = {
-            "source_ids": ["401"],
+            "event_id": "crm_mirror:hash",
+            "source_ids": ["crm_mirror:hash", "401"],
             "occurred_at": "2026-01-01T10:00:00+03:00",
             "channel": "max",
             "direction": "incoming",
@@ -108,6 +109,59 @@ class DealEvidenceDeltaContractTests(unittest.TestCase):
             "unused",
         )
         self.assertEqual([item["evidence_id"] for item in evidence], ["message:401"])
+
+    @patch("openai_api.llm.deal_evidence.transcript_items", return_value=[])
+    def test_non_numeric_messenger_sources_are_not_evidence(self, _transcript_items) -> None:
+        events = [
+            {
+                "event_id": "crm_mirror:hash",
+                "source_ids": ["crm_mirror:hash", "content-hash"],
+                "channel": "whatsapp",
+                "direction": "incoming",
+                "participant_role": "client",
+                "contact_class": "confirmed_contact",
+                "content": "synthetic-client-message",
+            },
+        ]
+        self.assertEqual(collect_deal_evidence({"deal_id": "1", "normalized_communications": events}, "unused"), [])
+
+    @patch("openai_api.llm.deal_evidence.transcript_items", return_value=[])
+    def test_outbound_internal_and_ordinary_comments_are_excluded(self, _transcript_items) -> None:
+        base = {
+            "source_ids": ["501"],
+            "channel": "max",
+            "participant_role": "client",
+            "content": "synthetic-message",
+        }
+        events = [
+            {**base, "direction": "outgoing", "participant_role": "employee", "contact_class": "confirmed_contact"},
+            {**base, "direction": "internal", "participant_role": "employee", "contact_class": "internal_information"},
+            {**base, "direction": "incoming", "contact_class": "attempt"},
+        ]
+        self.assertEqual(collect_deal_evidence({"deal_id": "1", "normalized_communications": events}, "unused"), [])
+
+    @patch("openai_api.llm.deal_evidence.transcript_items", return_value=[])
+    def test_messenger_delta_uses_numeric_identity(self, _transcript_items) -> None:
+        event = {
+            "event_id": "crm_mirror:hash",
+            "source_ids": ["crm_mirror:hash", "601"],
+            "channel": "message",
+            "direction": "incoming",
+            "participant_role": "client",
+            "contact_class": "confirmed_contact",
+            "content": "synthetic-v1",
+        }
+        first = collect_deal_evidence({"deal_id": "1", "normalized_communications": [event]}, "unused")
+        delta, coverage = evidence_delta(first, {})
+        self.assertEqual(delta[0]["evidence_id"], "message:601")
+
+        revised = {**event, "content": "synthetic-v2"}
+        revised_delta, _ = evidence_delta(
+            collect_deal_evidence({"deal_id": "1", "normalized_communications": [revised]}, "unused"),
+            coverage,
+        )
+        self.assertEqual(revised_delta[0]["evidence_id"], "message:601")
+        self.assertEqual(revised_delta[0]["delta_kind"], "evidence_revision")
 
     @patch("openai_api.llm.deal_evidence.transcript_items")
     def test_same_call_transcript_is_omitted_until_content_changes(self, transcript_items) -> None:

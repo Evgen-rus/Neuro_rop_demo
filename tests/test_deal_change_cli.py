@@ -111,6 +111,36 @@ class DealChangeCliTests(unittest.TestCase):
             self.assertEqual(analyze_deal.latest_transcript(transcripts), source)
             self.assertEqual(analyze_deal_if_changed.latest_transcript_or_none(transcripts), source)
 
+    def test_stage5_evidence_uses_the_normalized_messenger_ledger(self) -> None:
+        normalized = [{"event_id": "crm_mirror:hash", "source_ids": ["3098173"]}]
+        with (
+            patch.object(analyze_deal_if_changed, "merge_deal_bundle", return_value=({}, {})),
+            patch.object(analyze_deal_if_changed, "collect_deal_evidence", return_value=[]) as collect,
+        ):
+            analyze_deal_if_changed.stage5_inputs(
+                Path("unused.sqlite"),
+                deal_id="7",
+                raw_bundle={"deal_id": "7"},
+                current_deal_dir=Path("unused"),
+                baseline=None,
+                normalized_communications=normalized,
+            )
+        self.assertEqual(collect.call_args.args[0]["normalized_communications"], normalized)
+
+    def test_changed_evidence_ids_include_new_canonical_message(self) -> None:
+        current = [{
+            "evidence_id": "message:3098173",
+            "content_hash": "new",
+            "kind": "inbound_message",
+        }]
+        self.assertEqual(
+            analyze_deal_if_changed._continuity_changed_evidence_ids(
+                current,
+                {"evidence_coverage": {}},
+            ),
+            ["message:3098173"],
+        )
+
     def test_dry_run_decision_does_not_save_snapshot_or_analysis_state(self) -> None:
         args = SimpleNamespace(
             deal_id="7",
@@ -275,14 +305,80 @@ class DealChangeCliTests(unittest.TestCase):
                     args=SimpleNamespace(deal_id="7", deal_root=str(root)),
                     paths=paths,
                     error=error,
-                    baseline={"analysis": {}},
+                    baseline={"analysis_run_id": 1, "analysis": {}},
+                    fingerprint="fingerprint",
                     changed_evidence_ids=[],
+                    new_evidence=[],
                     available_evidence_ids=None,
                     enforce_confirmation_evidence=False,
                 )
             self.assertEqual(caller.call_args.kwargs["model"], analyze_deal_if_changed.ANALYSIS_REPAIR_MODEL)
             self.assertEqual(caller.call_args.kwargs["call_type"], "deal_continuity_repair")
             continuity.assert_called_once()
+
+    def test_primary_rejected_candidate_archive_survives_analysis_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = {"analysis": root / "analysis" / "deal_7_analysis.json"}
+            paths["analysis"].parent.mkdir(parents=True)
+            original = {"analysis": {"deal_id": "7", "marker": "rejected"}}
+            paths["analysis"].write_text(json.dumps(original), encoding="utf-8")
+            error = AnalysisValidationError("continuity", errors=["lost unresolved commitment: c17"])
+            archived = analyze_deal_if_changed.archive_current_rejected_candidate(
+                paths=paths,
+                deal_id="7",
+                fingerprint="fingerprint",
+                baseline_run_id=16003,
+                stage="primary",
+                error=error,
+                changed_evidence_ids=["call:668723"],
+            )
+            paths["analysis"].write_text(json.dumps({"analysis": {"marker": "published"}}), encoding="utf-8")
+            saved = json.loads(archived.read_text(encoding="utf-8"))
+            self.assertEqual(saved["candidate"], original["analysis"])
+            self.assertEqual(saved["trusted_baseline_run_id"], 16003)
+            self.assertEqual(saved["changed_evidence_ids"], ["call:668723"])
+
+    def test_rejected_repair_candidate_is_archived_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = {
+                "analysis": root / "analysis" / "deal_7_analysis.json",
+                "prompt": root / "analysis" / "prompt.txt",
+                "report": root / "analysis" / "report.md",
+            }
+            paths["analysis"].parent.mkdir(parents=True)
+            paths["analysis"].write_text(json.dumps({"analysis": {"deal_id": "7"}}), encoding="utf-8")
+            paths["prompt"].write_text("contract", encoding="utf-8")
+            repaired = {"deal_id": "7", "deal_context": {"commitments": []}}
+            plan = Mock(prompt="targeted", sections=("deal_context",))
+            plan.merge.return_value = repaired
+            first_error = AnalysisValidationError("continuity", errors=["lost unresolved commitment: c17"])
+            second_error = AnalysisValidationError("continuity", errors=["closed unresolved commitment without new evidence: c17"])
+            with (
+                patch.object(analyze_deal_if_changed, "build_continuity_repair_plan", return_value=plan),
+                patch.object(analyze_deal_if_changed, "call_analysis_json", return_value=({"sections": {}}, {})),
+                patch.object(analyze_deal_if_changed, "normalize_analysis_for_validation"),
+                patch.object(analyze_deal_if_changed, "validate_deal_analysis"),
+                patch.object(analyze_deal_if_changed, "validate_deal_analysis_continuity", side_effect=second_error),
+            ):
+                with self.assertRaises(AnalysisValidationError):
+                    analyze_deal_if_changed.repair_continuity_candidate(
+                        args=SimpleNamespace(deal_id="7", deal_root=str(root)),
+                        paths=paths,
+                        error=first_error,
+                        baseline={"analysis_run_id": 16003, "analysis": {}},
+                        fingerprint="fingerprint",
+                        changed_evidence_ids=["call:668723"],
+                        new_evidence=[{"evidence_id": "call:668723", "text": "synthetic"}],
+                        available_evidence_ids=None,
+                        enforce_confirmation_evidence=False,
+                    )
+            artifacts = list((paths["analysis"].parent / "rejected").glob("*_repair.json"))
+            self.assertEqual(len(artifacts), 1)
+            saved = json.loads(artifacts[0].read_text(encoding="utf-8"))
+            self.assertEqual(saved["candidate"], repaired)
+            self.assertEqual(saved["stage"], "repair")
 
     def test_failed_incremental_repair_becomes_terminal_without_full_fallback(self) -> None:
         error = AnalysisValidationError(

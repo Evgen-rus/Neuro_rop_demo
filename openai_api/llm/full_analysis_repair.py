@@ -48,6 +48,7 @@ LOCAL_ERROR = re.compile(
 PREFIX_PATH = re.compile(rf"^({PATH})(?=\s)")
 EXPECTED_PATH = re.compile(rf"^expected ({PATH})(?=\s)")
 MAX_PACKET_CHARS = 32_000
+CANONICAL_EVIDENCE_ID = re.compile(r"^(?:call|message|email):\d+$")
 
 
 def _protected_values(value: Any, path: str = "") -> dict[str, Any]:
@@ -119,7 +120,11 @@ def _protected_atoms(value: Any) -> frozenset[tuple[str, str]]:
     if isinstance(value, dict):
         for key, item in value.items():
             if key in {"evidence", "sources", "quote"} or key.endswith("_id") or key.startswith("crm_"):
-                atoms.add((key, json.dumps(item, ensure_ascii=False, sort_keys=True)))
+                values = item if key in {"evidence", "sources"} and isinstance(item, list) else [item]
+                atoms.update(
+                    (key, json.dumps(protected, ensure_ascii=False, sort_keys=True))
+                    for protected in values
+                )
             else:
                 atoms.update(_protected_atoms(item))
     elif isinstance(value, list):
@@ -223,6 +228,7 @@ def build_continuity_repair_plan(
     *,
     baseline: dict[str, Any],
     changed_evidence_ids: list[str],
+    new_evidence: list[dict[str, Any]] | None = None,
 ) -> SectionRepairPlan | None:
     """Build one evidence-closed repair packet for deterministic continuity errors."""
     if not error.errors or not isinstance(candidate, dict) or not isinstance(baseline, dict):
@@ -258,10 +264,27 @@ def build_continuity_repair_plan(
     ):
         return None
     baseline_analysis = baseline.get("analysis") if isinstance(baseline.get("analysis"), dict) else baseline
+    changed_ids = list(dict.fromkeys(
+        str(item) for item in changed_evidence_ids if CANONICAL_EVIDENCE_ID.fullmatch(str(item))
+    ))
+    allowed_new_evidence = []
+    for item in new_evidence or []:
+        evidence_id = str(item.get("evidence_id") or "") if isinstance(item, dict) else ""
+        if evidence_id not in changed_ids or not any(
+            str(item.get(key) or "").strip() for key in ("text", "transcript", "subject")
+        ):
+            continue
+        allowed_new_evidence.append({
+            key: item[key]
+            for key in ("evidence_id", "kind", "occurred_at", "subject", "text", "transcript")
+            if item.get(key) not in (None, "")
+        })
+    allowed_new_ids = [str(item["evidence_id"]) for item in allowed_new_evidence]
     packet = {
         "allowed_sections": selected,
         "continuity_errors": [str(item) for item in error.errors],
-        "changed_evidence_ids": [str(item) for item in changed_evidence_ids],
+        "changed_evidence_ids": changed_ids,
+        "new_or_revised_evidence": allowed_new_evidence,
         "baseline_sections": {key: baseline_analysis.get(key) for key in selected if key in baseline_analysis},
         "candidate_sections": {key: candidate[key] for key in selected},
         "section_contract": {key: contract[key] for key in selected},
@@ -270,10 +293,12 @@ def build_continuity_repair_plan(
     if len(encoded) > MAX_PACKET_CHARS:
         return None
     prompt = '''Ты исправляешь только deterministic continuity errors готового анализа сделки.
-Не анализируй сделку заново и не добавляй факты. Восстанови unresolved baseline items,
-если changed_evidence_ids не подтверждают их закрытие, и синхронизируй только allowed_sections.
+Не анализируй сделку заново и не добавляй факты. Для каждого affected item проверь только
+new_or_revised_evidence: если оно подтверждает закрытие, сохрани новый status и добавь его
+evidence_id; иначе восстанови unresolved baseline status. Синхронизируй только allowed_sections.
 Верни ровно JSON {"sections": {...}} для всех allowed_sections. Evidence, sources, quotes,
-CRM-поля и стабильные IDs можно только сохранить из candidate_sections или baseline_sections.
+CRM-поля и стабильные IDs можно только сохранить из candidate_sections или baseline_sections;
+добавить можно только canonical evidence_id из changed_evidence_ids.
 Если безопасное локальное исправление невозможно, верни {"cannot_repair":true}.
 
 CONTINUITY_REPAIR_PACKET
@@ -281,7 +306,7 @@ CONTINUITY_REPAIR_PACKET
     allowed = _protected_atoms({
         "candidate": packet["candidate_sections"],
         "baseline": packet["baseline_sections"],
-    })
+    }) | _protected_atoms({"evidence": allowed_new_ids})
     return SectionRepairPlan(
         prompt,
         tuple(selected),
