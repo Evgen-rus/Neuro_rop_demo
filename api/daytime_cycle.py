@@ -1,4 +1,4 @@
-"""Server-side 30-minute Bitrix cycle: sync, CRM facts, then existing FULL/MINI/skip."""
+"""Server-side 45-minute Bitrix cycle: sync, CRM facts, then existing FULL/MINI/skip."""
 
 from __future__ import annotations
 
@@ -38,8 +38,8 @@ from storage.rop_db import (
 )
 
 
-CYCLE_INTERVAL = timedelta(minutes=30)
-WORKDAY_START = time(7, 0)
+CYCLE_INTERVAL = timedelta(minutes=45)
+WORKDAY_START = time(8, 0)
 WORKDAY_END = time(18, 0)
 PLANNING_REPORT_TIME = time(15, 45)
 EVENING_CYCLE_TIME = time(22, 0)
@@ -135,7 +135,7 @@ def daytime_cycle_status() -> dict[str, Any]:
         "running": _thread is not None and _thread.is_alive(),
         "interval_minutes": int(CYCLE_INTERVAL.total_seconds() // 60),
         "workdays": "mon-fri",
-        "work_hours": "07:00-18:00",
+        "work_hours": f"{WORKDAY_START.strftime('%H:%M')}-{WORKDAY_END.strftime('%H:%M')}",
         "planning_report_at": PLANNING_REPORT_TIME.strftime("%H:%M"),
         "evening_cycle_at": EVENING_CYCLE_TIME.strftime("%H:%M"),
         "day_end_report_at": DAY_END_REPORT_TIME.strftime("%H:%M"),
@@ -807,7 +807,7 @@ def _start_interval_cycle(due: datetime) -> None:
 
     def run() -> None:
         try:
-            run_daytime_cycle(trigger="evening_22" if due.time() == EVENING_CYCLE_TIME else "interval_30m", now=due)
+            run_daytime_cycle(trigger="evening_22" if due.time() == EVENING_CYCLE_TIME else "interval", now=due)
         except Exception:  # noqa: BLE001 - a failed worker must not kill future ticks
             logger.exception("Необработанная ошибка дневного цикла; следующий слот остаётся в расписании.")
 
@@ -842,7 +842,12 @@ def _publish_day_end_report(due: datetime) -> dict[str, Any]:
 
 
 def _scheduler_loop() -> None:
-    logger.info("Планировщик: будни 07:00–18:00 каждые 30 минут, цикл в 22:00, отчёты в 15:45 и 23:00 МСК.")
+    logger.info(
+        "Планировщик: будни %s–%s каждые %s минут, цикл в 22:00, отчёты в 15:45 и 23:00 МСК.",
+        WORKDAY_START.strftime("%H:%M"),
+        WORKDAY_END.strftime("%H:%M"),
+        int(CYCLE_INTERVAL.total_seconds() // 60),
+    )
     published_on: date | None = None
     day_end_on: date | None = None
     while not _stop_event.is_set():

@@ -93,8 +93,11 @@ def audio_due(payload: dict, deal_id: str, now: datetime, *, audio_root: Path = 
             # Pending downloads/readiness/transcription are not gated by DATE_MODIFY.
             if not row.get("downloads") or any(not item.get("is_short_no_answer") for item in row.get("downloads", [])):
                 return True
-    return any(row.get("audio_kind") == "max_voice" and row.get("status") != "transcribed_and_purged"
-               for row in rows.values())
+    return any(
+        row.get("audio_kind") == "max_voice"
+        and row.get("status") not in {"transcribed_and_purged", "skipped_video"}
+        for row in rows.values()
+    )
 
 
 def _result(response: dict) -> Any:

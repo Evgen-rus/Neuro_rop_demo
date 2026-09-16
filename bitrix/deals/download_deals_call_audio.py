@@ -57,6 +57,7 @@ RECORDING_DURATION_RATIO = 0.80
 RECORDING_DURATION_TOLERANCE_SECONDS = 5.0
 MAX_VOICE_LOOKBACK_DAYS = 30
 MAX_VOICE_HOSTS = frozenset({"store.wazzup24.com"})
+VIDEO_FILE_EXTENSIONS = frozenset({".mp4", ".mov", ".avi", ".mkv"})
 
 logger = get_logger(__file__)
 
@@ -438,6 +439,16 @@ def deterministic_output_path(output_dir: Path, response: requests.Response, fal
     return path.with_suffix(extension)
 
 
+def is_non_audio_video(content_type: str, output_path: Path) -> bool:
+    """Видео Max не качаем; audio/* качаем даже при странном имени файла."""
+    media_type = (content_type or "").split(";")[0].strip().lower()
+    if media_type.startswith("audio/"):
+        return False
+    if media_type.startswith("video/"):
+        return True
+    return output_path.suffix.lower() in VIDEO_FILE_EXTENSIONS
+
+
 def try_download_url(
     url: str,
     output_dir: Path,
@@ -486,6 +497,20 @@ def try_download_url(
                         "size_bytes": output_path.stat().st_size,
                     }
                 )
+            if is_non_audio_video(content_type, output_path):
+                return {
+                    "ok": True,
+                    "status": "skipped_video",
+                    "http_status": response.status_code,
+                    "content_type": content_type,
+                    "url": url,
+                    "skip_transcribe": True,
+                    "skip_transcribe_reason": "non_audio_video",
+                    "recording_ready_for_transcription": False,
+                    "audio_purged": True,
+                    "local_path": str(output_path),
+                    "size_bytes": 0,
+                }
 
             temporary_path = output_path.with_name(f"{output_path.name}.part")
             if temporary_path.exists():
@@ -550,7 +575,7 @@ def existing_downloads_by_activity(manifest: dict[str, Any]) -> dict[str, list[d
         for item in call.get("downloads") or []:
             if not isinstance(item, dict) or not item.get("ok") or not item.get("local_path"):
                 continue
-            if Path(str(item["local_path"])).exists():
+            if Path(str(item["local_path"])).exists() or item.get("status") == "skipped_video":
                 valid_downloads.append(item)
         if valid_downloads:
             rows[activity_id] = valid_downloads
@@ -954,6 +979,11 @@ def process_max_voice(
         row["status"] = "transcribed_and_purged"
         return row
     if missing_only and existing_downloads:
+        # skipped_video помнится без файла; mark_existing_downloads затёр бы статус.
+        if any(item.get("status") == "skipped_video" for item in existing_downloads):
+            row["downloads"] = [dict(item) for item in existing_downloads]
+            row["status"] = "skipped_video"
+            return row
         row["downloads"] = mark_existing_downloads(existing_downloads)
         row["status"] = "already_downloaded"
         return row
@@ -970,6 +1000,10 @@ def process_max_voice(
         result = {"ok": False, "status": "download_request_error", "error": str(error)}
     result["source"] = "wazzup_max"
     result["url_fingerprint"] = message.get("url_fingerprint")
+    if result.get("status") == "skipped_video":
+        row["downloads"].append(result)
+        row["status"] = "skipped_video"
+        return row
     if result.get("ok"):
         result["recording_ready_for_transcription"] = True
         result["skip_transcribe"] = False

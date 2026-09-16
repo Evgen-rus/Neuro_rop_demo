@@ -10,6 +10,7 @@ from unittest.mock import patch
 from bitrix.deals.download_deals_call_audio import (
     audio_file_discovery_expired,
     client_day_related_call_activities,
+    existing_downloads_by_activity,
     existing_transcriptions_by_activity,
     max_voice_messages,
     max_voice_urls,
@@ -19,9 +20,27 @@ from bitrix.deals.download_deals_call_audio import (
     record_transcribed_and_purged,
     refresh_missing_call_files,
     should_recheck_recording,
+    try_download_url,
 )
 from bitrix.leads.download_leads_call_audio import build_manifest as build_lead_audio_manifest
 from setup import MSK_TZ
+
+
+class _FakeDownloadResponse:
+    def __init__(self, *, content_type: str, url: str, body: bytes = b"payload"):
+        self.status_code = 200
+        self.headers = {"content-type": content_type}
+        self.url = url
+        self._body = body
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def iter_content(self, _chunk_size: int):
+        yield self._body
+
+    def close(self) -> None:
+        return None
 
 
 class RecordingClient:
@@ -119,6 +138,151 @@ class AudioRetentionTests(unittest.TestCase):
         self.assertEqual(result["status"], "downloaded")
         self.assertTrue(result["downloads"][0]["recording_ready_for_transcription"])
         self.assertFalse(result["downloads"][0]["skip_transcribe"])
+
+    def test_try_download_url_skips_video_without_writing_file(self) -> None:
+        response = _FakeDownloadResponse(
+            content_type="video/mp4",
+            url="https://example.test/clip.mp4",
+            body=b"not-audio",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            with patch("bitrix.deals.download_deals_call_audio.requests.get", return_value=response):
+                result = try_download_url("https://example.test/clip.mp4", output, "max_voice_100")
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "skipped_video")
+            self.assertTrue(result["skip_transcribe"])
+            self.assertEqual(result["skip_transcribe_reason"], "non_audio_video")
+            self.assertFalse(result["recording_ready_for_transcription"])
+            self.assertTrue(result["audio_purged"])
+            self.assertEqual(result["size_bytes"], 0)
+            local_path = Path(result["local_path"])
+            self.assertEqual(local_path.name, "clip.mp4")
+            self.assertFalse(local_path.exists())
+            self.assertEqual(list(output.glob("*.part")), [])
+            self.assertEqual(list(output.iterdir()), [])
+
+    def test_try_download_url_still_saves_audio_mpeg(self) -> None:
+        response = _FakeDownloadResponse(
+            content_type="audio/mpeg",
+            url="https://example.test/voice.mp3",
+            body=b"real-audio",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            with (
+                patch("bitrix.deals.download_deals_call_audio.requests.get", return_value=response),
+                patch(
+                    "bitrix.deals.download_deals_call_audio.enrich_download_with_duration",
+                    side_effect=lambda value: value,
+                ),
+            ):
+                result = try_download_url("https://example.test/voice.mp3", output, "max_voice_100")
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "downloaded")
+            local_path = Path(result["local_path"])
+            self.assertEqual(local_path.name, "voice.mp3")
+            self.assertEqual(local_path.read_bytes(), b"real-audio")
+
+    def test_missing_only_keeps_skipped_video_without_redownload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing_path = Path(directory) / "clip.mp4"
+            existing = [
+                {
+                    "ok": True,
+                    "status": "skipped_video",
+                    "local_path": str(missing_path),
+                    "skip_transcribe": True,
+                    "skip_transcribe_reason": "non_audio_video",
+                    "recording_ready_for_transcription": False,
+                    "audio_purged": True,
+                    "size_bytes": 0,
+                }
+            ]
+            remembered = existing_downloads_by_activity(
+                {"calls": [{"activity_id": "max_100_abc", "downloads": existing}]}
+            )
+            self.assertEqual(list(remembered), ["max_100_abc"])
+            message = {
+                "activity_id": "max_100_abc",
+                "timeline_comment_id": "100",
+                "entity_id": "42",
+                "url": "https://store.wazzup24.com/clip",
+                "url_fingerprint": "abc",
+            }
+            with patch("bitrix.deals.download_deals_call_audio.try_download_url") as download:
+                result = process_max_voice(
+                    Path(directory),
+                    message,
+                    existing_downloads=remembered["max_100_abc"],
+                    missing_only=True,
+                )
+            download.assert_not_called()
+            self.assertEqual(result["status"], "skipped_video")
+            self.assertEqual(result["downloads"][0]["status"], "skipped_video")
+            self.assertTrue(result["downloads"][0]["skip_transcribe"])
+            self.assertFalse(missing_path.exists())
+
+    def test_process_max_voice_keeps_skipped_video_flags_from_download(self) -> None:
+        skipped = {
+            "ok": True,
+            "status": "skipped_video",
+            "skip_transcribe": True,
+            "skip_transcribe_reason": "non_audio_video",
+            "recording_ready_for_transcription": False,
+            "audio_purged": True,
+            "local_path": "clip.mp4",
+            "size_bytes": 0,
+        }
+        message = {
+            "activity_id": "max_100_abc",
+            "timeline_comment_id": "100",
+            "entity_id": "42",
+            "url": "https://store.wazzup24.com/clip",
+            "url_fingerprint": "abc",
+        }
+        with patch("bitrix.deals.download_deals_call_audio.try_download_url", return_value=skipped):
+            result = process_max_voice(Path("unused"), message, missing_only=True)
+
+        self.assertEqual(result["status"], "skipped_video")
+        self.assertTrue(result["downloads"][0]["skip_transcribe"])
+        self.assertEqual(result["downloads"][0]["skip_transcribe_reason"], "non_audio_video")
+        self.assertFalse(result["downloads"][0]["recording_ready_for_transcription"])
+
+    def test_audio_due_treats_skipped_video_and_purged_max_voice_as_terminal(self) -> None:
+        from api.crm_change_gate import audio_due
+
+        now = datetime(2026, 8, 24, 12, 0, tzinfo=MSK_TZ)
+        payload = {"context": {"activities": {"items": []}}, "customer_history": {}}
+        with tempfile.TemporaryDirectory() as directory:
+            audio_root = Path(directory)
+
+            def write_manifest(status: str) -> None:
+                (audio_root / "deal_1_call_audio_manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "calls": [
+                                {
+                                    "activity_id": "max_100_abc",
+                                    "audio_kind": "max_voice",
+                                    "status": status,
+                                    "downloads": [{"ok": True, "status": status}],
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+
+            write_manifest("skipped_video")
+            self.assertFalse(audio_due(payload, "1", now, audio_root=audio_root))
+            write_manifest("transcribed_and_purged")
+            self.assertFalse(audio_due(payload, "1", now, audio_root=audio_root))
+            write_manifest("already_downloaded")
+            self.assertTrue(audio_due(payload, "1", now, audio_root=audio_root))
 
     def test_recorded_purge_keeps_missing_only_from_downloading_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
