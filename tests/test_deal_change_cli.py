@@ -16,7 +16,6 @@ from openai_api.change_detection.decision_engine import (
     ProcessingDecision,
 )
 from openai_api.llm import analyze_deal, analyze_deal_if_changed
-from openai_api.llm.validation import AnalysisValidationError
 
 
 class DealChangeCliTests(unittest.TestCase):
@@ -29,11 +28,9 @@ class DealChangeCliTests(unittest.TestCase):
         stage5_error: Exception | None = None,
         analyzer_error: Exception | None = None,
         persistence_error: Exception | None = None,
-        repair_error: Exception | None = None,
         force_llm: bool = False,
         source_status: dict | None = None,
         trusted_baseline: bool | None = None,
-        suppression: dict | None = None,
     ) -> tuple[Mock, Mock]:
         args = SimpleNamespace(
             deal_id="7", deal_root=str(root), db_path=str(root / "state.sqlite"),
@@ -58,7 +55,6 @@ class DealChangeCliTests(unittest.TestCase):
             patch.object(analyze_deal_if_changed, "fingerprint_snapshot", return_value="new"),
             patch.object(analyze_deal_if_changed, "get_entity_state", return_value={"snapshot": {}, "last_analysis": {}}),
             patch.object(analyze_deal_if_changed, "get_trusted_deal_baseline", return_value=baseline),
-            patch.object(analyze_deal_if_changed, "get_deal_semantic_failure", return_value=suppression),
             patch.object(analyze_deal_if_changed, "compare_snapshots", return_value=decision.diff),
             patch.object(analyze_deal_if_changed, "get_entity_memory", return_value=None),
             patch.object(analyze_deal_if_changed, "decide_deal_processing", return_value=decision),
@@ -82,9 +78,6 @@ class DealChangeCliTests(unittest.TestCase):
             patch.object(analyze_deal_if_changed, "emit_deal_publish_ready"),
             patch.object(analyze_deal_if_changed, "save_analysis_run", return_value=2),
             patch.object(analyze_deal_if_changed, "run_existing_analyzer", side_effect=analyzer_error),
-            patch.object(analyze_deal_if_changed, "repair_continuity_candidate", side_effect=repair_error),
-            patch.object(analyze_deal_if_changed, "persist_terminal_continuity_failure", return_value=3),
-            patch.object(analyze_deal_if_changed, "emit_semantic_failure"),
         )
         for item in patches:
             item.start()
@@ -126,20 +119,6 @@ class DealChangeCliTests(unittest.TestCase):
                 normalized_communications=normalized,
             )
         self.assertEqual(collect.call_args.args[0]["normalized_communications"], normalized)
-
-    def test_changed_evidence_ids_include_new_canonical_message(self) -> None:
-        current = [{
-            "evidence_id": "message:3098173",
-            "content_hash": "new",
-            "kind": "inbound_message",
-        }]
-        self.assertEqual(
-            analyze_deal_if_changed._continuity_changed_evidence_ids(
-                current,
-                {"evidence_coverage": {}},
-            ),
-            ["message:3098173"],
-        )
 
     def test_dry_run_decision_does_not_save_snapshot_or_analysis_state(self) -> None:
         args = SimpleNamespace(
@@ -219,268 +198,11 @@ class DealChangeCliTests(unittest.TestCase):
         self.assertIsNotNone(analyzer.call_args.kwargs["incremental_context"])
         self.assertEqual(persist.call_args.kwargs["decision_status"], INCREMENTAL_LLM_ANALYSIS)
 
-    def test_repairable_continuity_error_runs_one_incremental_correction(self) -> None:
-        error = AnalysisValidationError(
-            "Invalid deal analysis continuity: confirmation upgrade without new evidence: decision_path",
-            errors=["confirmation upgrade without new evidence: decision_path"],
-        )
-        persist_calls = {"count": 0}
-
-        def persist_once(*_args, **_kwargs):
-            persist_calls["count"] += 1
-            if persist_calls["count"] == 1:
-                raise error
-            return 1
-
-        with tempfile.TemporaryDirectory() as directory:
-            analyzer, persist = self._run_main(
-                Path(directory),
-                incremental_enabled=True,
-                persistence_error=persist_once,
-                decision=ProcessingDecision(
-                    status=FULL_LLM_ANALYSIS,
-                    reasons=["new evidence"],
-                    triggers=[],
-                    diff={"changes": ["transcript_changed"], "details": {}},
-                ),
-            )
-        analyzer.assert_called_once()
-        analyze_deal_if_changed.repair_continuity_candidate.assert_called_once()
-        self.assertEqual(persist.call_count, 2)
-        self.assertEqual(persist.call_args.kwargs["decision_status"], INCREMENTAL_LLM_ANALYSIS)
-
-    def test_full_continuity_error_uses_targeted_repair_then_publishes(self) -> None:
-        error = AnalysisValidationError(
-            "Invalid deal analysis continuity: closed unresolved commitment without new evidence: c17",
-            errors=["closed unresolved commitment without new evidence: c17"],
-        )
-        calls = 0
-
-        def persist_once(*_args, **_kwargs):
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                raise error
-            return 1
-
+    def test_normal_full_run_has_no_semantic_suppression(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             analyzer, persist = self._run_main(
                 Path(directory),
                 trusted_baseline=True,
-                persistence_error=persist_once,
-                decision=ProcessingDecision(
-                    status=FULL_LLM_ANALYSIS,
-                    reasons=["new transcript"],
-                    triggers=[],
-                    diff={"changes": ["transcript_changed"], "details": {}},
-                ),
-            )
-        analyzer.assert_called_once()
-        analyze_deal_if_changed.repair_continuity_candidate.assert_called_once()
-        self.assertEqual(persist.call_count, 2)
-
-    def test_targeted_continuity_repair_uses_repair_model_and_revalidates(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            paths = {
-                "analysis": root / "analysis.json",
-                "prompt": root / "prompt.txt",
-                "report": root / "report.md",
-            }
-            paths["analysis"].write_text(json.dumps({"analysis": {"deal_id": "7"}}), encoding="utf-8")
-            paths["prompt"].write_text("contract", encoding="utf-8")
-            plan = Mock(prompt="targeted", sections=("deal_context",))
-            plan.merge.return_value = {"deal_id": "7", "deal_context": {}}
-            error = AnalysisValidationError("continuity", errors=["lost unresolved commitment: c17"])
-            with (
-                patch.object(analyze_deal_if_changed, "build_continuity_repair_plan", return_value=plan),
-                patch.object(analyze_deal_if_changed, "call_analysis_json", return_value=({"sections": {}}, {"model": "repair"})) as caller,
-                patch.object(analyze_deal_if_changed, "normalize_analysis_for_validation"),
-                patch.object(analyze_deal_if_changed, "validate_deal_analysis"),
-                patch.object(analyze_deal_if_changed, "validate_deal_analysis_continuity") as continuity,
-                patch.object(analyze_deal_if_changed, "load_context_diagnostics_for_analysis", return_value=("", None, {})),
-                patch.object(analyze_deal_if_changed, "render_report", return_value="report"),
-            ):
-                analyze_deal_if_changed.repair_continuity_candidate(
-                    args=SimpleNamespace(deal_id="7", deal_root=str(root)),
-                    paths=paths,
-                    error=error,
-                    baseline={"analysis_run_id": 1, "analysis": {}},
-                    fingerprint="fingerprint",
-                    changed_evidence_ids=[],
-                    new_evidence=[],
-                    available_evidence_ids=None,
-                    enforce_confirmation_evidence=False,
-                )
-            self.assertEqual(caller.call_args.kwargs["model"], analyze_deal_if_changed.ANALYSIS_REPAIR_MODEL)
-            self.assertEqual(caller.call_args.kwargs["call_type"], "deal_continuity_repair")
-            continuity.assert_called_once()
-
-    def test_primary_rejected_candidate_archive_survives_analysis_overwrite(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            paths = {"analysis": root / "analysis" / "deal_7_analysis.json"}
-            paths["analysis"].parent.mkdir(parents=True)
-            original = {"analysis": {"deal_id": "7", "marker": "rejected"}}
-            paths["analysis"].write_text(json.dumps(original), encoding="utf-8")
-            error = AnalysisValidationError("continuity", errors=["lost unresolved commitment: c17"])
-            archived = analyze_deal_if_changed.archive_current_rejected_candidate(
-                paths=paths,
-                deal_id="7",
-                fingerprint="fingerprint",
-                baseline_run_id=16003,
-                stage="primary",
-                error=error,
-                changed_evidence_ids=["call:668723"],
-            )
-            paths["analysis"].write_text(json.dumps({"analysis": {"marker": "published"}}), encoding="utf-8")
-            saved = json.loads(archived.read_text(encoding="utf-8"))
-            self.assertEqual(saved["candidate"], original["analysis"])
-            self.assertEqual(saved["trusted_baseline_run_id"], 16003)
-            self.assertEqual(saved["changed_evidence_ids"], ["call:668723"])
-
-    def test_rejected_repair_candidate_is_archived_separately(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            paths = {
-                "analysis": root / "analysis" / "deal_7_analysis.json",
-                "prompt": root / "analysis" / "prompt.txt",
-                "report": root / "analysis" / "report.md",
-            }
-            paths["analysis"].parent.mkdir(parents=True)
-            paths["analysis"].write_text(json.dumps({"analysis": {"deal_id": "7"}}), encoding="utf-8")
-            paths["prompt"].write_text("contract", encoding="utf-8")
-            repaired = {"deal_id": "7", "deal_context": {"commitments": []}}
-            plan = Mock(prompt="targeted", sections=("deal_context",))
-            plan.merge.return_value = repaired
-            first_error = AnalysisValidationError("continuity", errors=["lost unresolved commitment: c17"])
-            second_error = AnalysisValidationError("continuity", errors=["closed unresolved commitment without new evidence: c17"])
-            with (
-                patch.object(analyze_deal_if_changed, "build_continuity_repair_plan", return_value=plan),
-                patch.object(analyze_deal_if_changed, "call_analysis_json", return_value=({"sections": {}}, {})),
-                patch.object(analyze_deal_if_changed, "normalize_analysis_for_validation"),
-                patch.object(analyze_deal_if_changed, "validate_deal_analysis"),
-                patch.object(analyze_deal_if_changed, "validate_deal_analysis_continuity", side_effect=second_error),
-            ):
-                with self.assertRaises(AnalysisValidationError):
-                    analyze_deal_if_changed.repair_continuity_candidate(
-                        args=SimpleNamespace(deal_id="7", deal_root=str(root)),
-                        paths=paths,
-                        error=first_error,
-                        baseline={"analysis_run_id": 16003, "analysis": {}},
-                        fingerprint="fingerprint",
-                        changed_evidence_ids=["call:668723"],
-                        new_evidence=[{"evidence_id": "call:668723", "text": "synthetic"}],
-                        available_evidence_ids=None,
-                        enforce_confirmation_evidence=False,
-                    )
-            artifacts = list((paths["analysis"].parent / "rejected").glob("*_repair.json"))
-            self.assertEqual(len(artifacts), 1)
-            saved = json.loads(artifacts[0].read_text(encoding="utf-8"))
-            self.assertEqual(saved["candidate"], repaired)
-            self.assertEqual(saved["stage"], "repair")
-
-    def test_failed_incremental_repair_becomes_terminal_without_full_fallback(self) -> None:
-        error = AnalysisValidationError(
-            "Invalid deal analysis continuity: lost unresolved commitment: manager_check",
-            errors=["lost unresolved commitment: manager_check"],
-        )
-
-        def persist_incremental_fails(*_args, **kwargs):
-            if kwargs.get("decision_status") == INCREMENTAL_LLM_ANALYSIS:
-                raise error
-            return 1
-
-        with tempfile.TemporaryDirectory() as directory:
-            analyzer, persist = self._run_main(
-                Path(directory),
-                incremental_enabled=True,
-                persistence_error=persist_incremental_fails,
-                decision=ProcessingDecision(
-                    status=FULL_LLM_ANALYSIS,
-                    reasons=["new evidence"],
-                    triggers=[],
-                    diff={"changes": ["transcript_changed"], "details": {}},
-                ),
-            )
-        analyzer.assert_called_once()
-        analyze_deal_if_changed.repair_continuity_candidate.assert_called_once()
-        self.assertEqual(persist.call_count, 2)
-        analyze_deal_if_changed.persist_terminal_continuity_failure.assert_called_once()
-
-    def test_unrepairable_continuity_error_skips_correction(self) -> None:
-        error = AnalysisValidationError(
-            "Invalid deal analysis continuity: unknown domain rule",
-            errors=["unknown domain rule"],
-        )
-
-        def persist_incremental_fails(*_args, **kwargs):
-            if kwargs.get("decision_status") == INCREMENTAL_LLM_ANALYSIS:
-                raise error
-            return 1
-
-        with tempfile.TemporaryDirectory() as directory:
-            analyzer, persist = self._run_main(
-                Path(directory),
-                incremental_enabled=True,
-                persistence_error=persist_incremental_fails,
-                decision=ProcessingDecision(
-                    status=FULL_LLM_ANALYSIS,
-                    reasons=["new evidence"],
-                    triggers=[],
-                    diff={"changes": ["transcript_changed"], "details": {}},
-                ),
-            )
-        analyzer.assert_called_once()
-        self.assertFalse(analyzer.call_args_list[0].kwargs.get("continuity_correction"))
-        analyze_deal_if_changed.repair_continuity_candidate.assert_not_called()
-        analyze_deal_if_changed.persist_terminal_continuity_failure.assert_called_once()
-
-    def test_targeted_repair_transport_error_does_not_create_semantic_suppression(self) -> None:
-        error = AnalysisValidationError(
-            "Invalid deal analysis continuity: lost unresolved commitment: c17",
-            errors=["lost unresolved commitment: c17"],
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            analyzer, _persist = self._run_main(
-                Path(directory),
-                incremental_enabled=True,
-                persistence_error=error,
-                repair_error=TimeoutError("repair timeout"),
-                decision=ProcessingDecision(
-                    status=FULL_LLM_ANALYSIS,
-                    reasons=["new transcript"],
-                    triggers=[],
-                    diff={"changes": ["transcript_changed"], "details": {}},
-                ),
-            )
-        analyzer.assert_called_once()
-        analyze_deal_if_changed.persist_terminal_continuity_failure.assert_not_called()
-
-    def test_same_failed_snapshot_is_suppressed_before_llm(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            analyzer, persist = self._run_main(
-                Path(directory),
-                incremental_enabled=True,
-                suppression={"error_type": "AnalysisValidationError"},
-                decision=ProcessingDecision(
-                    status=FULL_LLM_ANALYSIS,
-                    reasons=["recovery"],
-                    triggers=[],
-                    diff={"changes": ["transcript_changed"], "details": {}},
-                ),
-            )
-        analyzer.assert_not_called()
-        persist.assert_not_called()
-        self.assertEqual(analyze_deal_if_changed.save_analysis_run.call_args.kwargs["status"], "SEMANTIC_FAILURE_SUPPRESSED")
-
-    def test_force_llm_bypasses_same_snapshot_suppression(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            analyzer, _persist = self._run_main(
-                Path(directory),
-                incremental_enabled=True,
-                force_llm=True,
-                suppression={"error_type": "AnalysisValidationError"},
                 decision=ProcessingDecision(
                     status=FULL_LLM_ANALYSIS,
                     reasons=["recovery"],
@@ -489,6 +211,8 @@ class DealChangeCliTests(unittest.TestCase):
                 ),
             )
         analyzer.assert_called_once()
+        persist.assert_called_once()
+        analyze_deal_if_changed.save_analysis_run.assert_not_called()
 
     def test_incremental_error_runs_exactly_one_full_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -7,11 +7,7 @@ from pathlib import Path
 
 from storage.rop_db import (
     connect,
-    get_entity_state,
-    get_deal_semantic_failure,
     init_db,
-    save_deal_semantic_failure,
-    upsert_entity_state,
 )
 
 
@@ -152,52 +148,6 @@ class StorageMigrationTests(unittest.TestCase):
 
             init_db(db_path)
             self.assertIsNotNone(index_sql(db_path))
-
-    def test_semantic_failure_key_changes_with_snapshot_or_trusted_baseline(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            db_path = Path(directory) / "state.sqlite"
-            save_deal_semantic_failure(
-                db_path,
-                deal_id="18905",
-                fingerprint="snapshot-a",
-                trusted_baseline_run_id=17,
-                error_type="AnalysisValidationError",
-                continuity_errors=["closed unresolved commitment without new evidence: c17"],
-            )
-            failure = get_deal_semantic_failure(
-                db_path, deal_id="18905", fingerprint="snapshot-a", trusted_baseline_run_id=17
-            )
-            self.assertEqual(failure["continuity_errors"], ["closed unresolved commitment without new evidence: c17"])
-            self.assertIsNone(get_deal_semantic_failure(
-                db_path, deal_id="18905", fingerprint="snapshot-b", trusted_baseline_run_id=17
-            ))
-            self.assertIsNone(get_deal_semantic_failure(
-                db_path, deal_id="18905", fingerprint="snapshot-a", trusted_baseline_run_id=18
-            ))
-
-    def test_semantic_failure_does_not_advance_trusted_entity_state(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            db_path = Path(directory) / "state.sqlite"
-            upsert_entity_state(
-                db_path,
-                entity_type="deal",
-                entity_id="18905",
-                fingerprint="trusted-snapshot",
-                snapshot={"trusted": True},
-                last_analysis_status="FULL_LLM_ANALYSIS",
-            )
-            save_deal_semantic_failure(
-                db_path,
-                deal_id="18905",
-                fingerprint="failed-snapshot",
-                trusted_baseline_run_id=17,
-                error_type="AnalysisValidationError",
-                continuity_errors=["lost unresolved commitment: c17"],
-            )
-            state = get_entity_state(db_path, "deal", "18905")
-            self.assertEqual(state["current_fingerprint"], "trusted-snapshot")
-            self.assertEqual(state["snapshot"], {"trusted": True})
-
 
 if __name__ == "__main__":
     unittest.main()

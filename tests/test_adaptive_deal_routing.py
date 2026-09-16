@@ -26,7 +26,6 @@ def _routing(full_bytes: int, incremental_bytes: int) -> dict:
 def _incremental_payload(**overrides) -> dict:
     payload = {
         "PREVIOUS_TRUSTED_COMPLETE_ANALYSIS": {"deal_state": {"summary": "baseline"}},
-        "TRUSTED_CONTINUITY_BASELINE": {"deal_context": {"critical_facts": [{"fact_id": "stable_fact"}]}},
         "CRM_SEMANTIC_DELTA": [{"key": "deal:7", "change_type": "UPDATED_MEANINGFUL"}],
         "NEW_OR_REVISED_CLIENT_EVIDENCE": [{"evidence_id": "call:201", "text": "новый звонок"}],
         "AVAILABLE_CLIENT_EVIDENCE_IDS": ["call:101", "call:201"],
@@ -80,7 +79,7 @@ class AdaptiveDealRoutingUnitTests(unittest.TestCase):
         self.assertEqual(utf8_byte_len(text), 12)
         self.assertEqual(measure_full_variable_bytes(text, "я"), 12 + 2)
 
-    def test_incremental_bytes_exclude_shared_continuity_block(self) -> None:
+    def test_incremental_bytes_measure_variable_blocks(self) -> None:
         context = _incremental_payload()
         unique = {
             key: context[key]
@@ -93,10 +92,6 @@ class AdaptiveDealRoutingUnitTests(unittest.TestCase):
             )
         }
         self.assertEqual(measure_incremental_variable_bytes(context), json_utf8_byte_len(unique))
-        self.assertLess(
-            measure_incremental_variable_bytes(context),
-            json_utf8_byte_len(context),
-        )
 
     def test_diagnostics_contain_sizes_ratio_and_mode(self) -> None:
         routing = _routing(200, 100)

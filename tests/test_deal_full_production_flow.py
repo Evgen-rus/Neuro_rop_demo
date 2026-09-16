@@ -24,12 +24,9 @@ from openai_api.change_detection.decision_engine import (
 from openai_api.llm import analyze_deal_if_changed
 from openai_api.llm.analyze_deal import DEAL_PROMPT_CACHE_KEY, build_prompt
 from openai_api.llm.validation import (
-    AnalysisValidationError,
     DEAL_REQUIRED_FIELDS,
-    continuity_errors_are_repairable,
     normalize_analysis_for_validation,
     validate_deal_analysis,
-    validate_deal_analysis_continuity,
 )
 from progress_events import compact_decision_status
 from storage import rop_db
@@ -116,7 +113,6 @@ class DealFullProductionFlowTests(unittest.TestCase):
                 patch.object(analyze_deal_if_changed, "fingerprint_snapshot", return_value="new"),
                 patch.object(analyze_deal_if_changed, "get_entity_state", return_value={"snapshot": {}, "last_analysis": {}}),
                 patch.object(analyze_deal_if_changed, "get_trusted_deal_baseline", return_value=None),
-                patch.object(analyze_deal_if_changed, "get_deal_semantic_failure", return_value=None),
                 patch.object(analyze_deal_if_changed, "compare_snapshots", return_value=decision.diff),
                 patch.object(analyze_deal_if_changed, "get_entity_memory", return_value=None),
                 patch.object(analyze_deal_if_changed, "decide_deal_processing", return_value=decision),
@@ -185,10 +181,6 @@ class DealFullProductionFlowTests(unittest.TestCase):
                     "content_hash": "h1",
                     "kind": "call_transcript",
                 }],
-                continuity_baseline={
-                    "analysis": payload["analysis"],
-                    "evidence_coverage": {},
-                },
             )
             saved = json.loads(analysis_path.read_text(encoding="utf-8"))
             state = get_entity_state(db_path, "deal", "7")
@@ -340,63 +332,10 @@ class DealFullProductionFlowTests(unittest.TestCase):
         self.assertNotIn("PREVIOUS_ANALYSIS", prompt)
         self.assertNotIn("<incremental_analysis_rules>", prompt)
 
-    def test_full_prompt_contains_trusted_continuity_baseline_without_dropping_history(self) -> None:
-        prompt = build_prompt(
-            "7",
-            "История сделки",
-            "Транскрипция",
-            "Диагностика",
-            [],
-            {},
-            continuity_baseline={
-                "deal_context": {
-                    "critical_facts": [{
-                        "fact_id": "invoice_stage",
-                        "status": "needs_confirmation",
-                        "evidence": ["call:1"],
-                    }],
-                    "commitments": [{
-                        "commitment_id": "manager_check",
-                        "status": "open",
-                        "evidence": ["call:1"],
-                    }],
-                    "turning_points": [{
-                        "turning_point_id": "invoice",
-                        "status": "active",
-                        "evidence": ["call:1"],
-                    }],
-                    "source_conflicts": [{"description": "status conflict", "sources": ["call:1"]}],
-                },
-                "main_risk": {"risk_level": "high", "risk_type": "approval"},
-            },
-            continuity_correction=True,
-        )
-        for marker in ("invoice_stage", "manager_check", "invoice", "status conflict", "approval"):
-            self.assertIn(marker, prompt)
-        self.assertIn("История сделки", prompt)
-        self.assertIn("## TRUSTED CONTINUITY BASELINE", prompt)
-        self.assertIn("continuity_correction", prompt)
-
-    def test_full_analyzer_receives_actual_db_and_continuity_paths(self) -> None:
-        args = SimpleNamespace(deal_id="7", deal_root="workspace", model=None)
-        with patch.object(analyze_deal_if_changed.subprocess, "run") as run:
-            analyze_deal_if_changed.run_existing_analyzer(
-                args,
-                "none",
-                continuity_baseline=Path("baseline.json"),
-                continuity_correction=True,
-                db_path=Path("state.sqlite"),
-            )
-        command = run.call_args.args[0]
-        self.assertIn("--continuity-baseline", command)
-        self.assertIn("baseline.json", command)
-        self.assertIn("--continuity-correction", command)
-        self.assertIn("--db-path", command)
-        self.assertIn("state.sqlite", command)
-
-    def test_continuity_rejects_uncovered_reference_before_incremental_persistence(self) -> None:
+    def test_incremental_publishes_textual_evidence_without_canonical_id(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            db_path = root / "state.sqlite"
             analysis_path = root / "analysis.json"
             analysis_path.write_text(json.dumps({
                 "analysis_mode": "incremental",
@@ -404,28 +343,36 @@ class DealFullProductionFlowTests(unittest.TestCase):
                 "analysis": {
                     "main_risk": {"risk_level": "medium"},
                     "deal_context": {
-                        "critical_facts": [{
-                            "fact_id": "payment_terms",
-                            "status": "confirmed",
-                            "evidence": ["Email 655627"],
+                        "critical_facts": [],
+                        "commitments": [{
+                            "commitment_id": "manager_send_proposal",
+                            "status": "done",
+                            "evidence": ["Звонок 16.09, activity_id=670681"],
                         }],
                     },
                 },
-            }), encoding="utf-8")
-            with self.assertRaisesRegex(AnalysisValidationError, "uncovered explicit evidence reference"):
-                analyze_deal_if_changed.persist_successful_llm_run(
-                    db_path=root / "state.sqlite",
-                    args=SimpleNamespace(deal_id="7", deal_root=str(root), model=None),
-                    fingerprint="fp",
-                    snapshot={},
-                    decision_status=INCREMENTAL_LLM_ANALYSIS,
-                    paths={"analysis": analysis_path, "report": root / "report.md", "raw": root / "raw.txt"},
-                    decision_reason={"status": INCREMENTAL_LLM_ANALYSIS},
-                    evidence_coverage={},
-                    canonical_state={},
-                    available_evidence=[],
-                )
-            self.assertFalse((root / "state.sqlite").exists())
+            }, ensure_ascii=False), encoding="utf-8")
+            run_id = analyze_deal_if_changed.persist_successful_llm_run(
+                db_path=db_path,
+                args=SimpleNamespace(deal_id="7", deal_root=str(root), model=None),
+                fingerprint="fp",
+                snapshot={},
+                decision_status=INCREMENTAL_LLM_ANALYSIS,
+                paths={"analysis": analysis_path, "report": root / "report.md", "raw": root / "raw.txt"},
+                decision_reason={"status": INCREMENTAL_LLM_ANALYSIS},
+                evidence_coverage={},
+                canonical_state={
+                    "schema_id": "canonical_bitrix_state",
+                    "schema_version": "1",
+                    "owner": {"entity_type": "deal", "entity_id": "7"},
+                    "semantic_fingerprint": "canonical-fp",
+                },
+                available_evidence=[],
+            )
+            state = get_entity_state(db_path, "deal", "7")
+            saved = json.loads(analysis_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["last_analysis_status"], INCREMENTAL_LLM_ANALYSIS)
+        self.assertEqual(run_id, saved["analysis_run_id"])
 
     def test_incremental_persistence_allows_known_call_without_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -545,47 +492,6 @@ class DealFullProductionFlowTests(unittest.TestCase):
             saved = json.loads(analysis_path.read_text(encoding="utf-8"))
         self.assertEqual(run_id, saved["analysis_run_id"])
 
-    def test_incremental_persistence_still_rejects_unknown_call_id(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            analysis_path = root / "analysis.json"
-            analysis_path.write_text(json.dumps({
-                "analysis_mode": "incremental",
-                "evidence_ids_included": [],
-                "analysis": {
-                    "main_risk": {"risk_level": "medium"},
-                    "deal_context": {
-                        "critical_facts": [{
-                            "fact_id": "payment_terms",
-                            "status": "confirmed",
-                            "evidence": ["call:999999"],
-                        }],
-                    },
-                },
-            }), encoding="utf-8")
-            with self.assertRaisesRegex(AnalysisValidationError, "uncovered explicit evidence reference: call:999999"):
-                analyze_deal_if_changed.persist_successful_llm_run(
-                    db_path=root / "state.sqlite",
-                    args=SimpleNamespace(deal_id="7", deal_root=str(root), model=None),
-                    fingerprint="fp",
-                    snapshot={},
-                    decision_status=INCREMENTAL_LLM_ANALYSIS,
-                    paths={"analysis": analysis_path, "report": root / "report.md", "raw": root / "raw.txt"},
-                    decision_reason={"status": INCREMENTAL_LLM_ANALYSIS},
-                    evidence_coverage={},
-                    canonical_state={
-                        "entities": {
-                            "activity:667045": {
-                                "entity_type": "activity",
-                                "subtype": "call",
-                                "source_id": "667045",
-                            }
-                        }
-                    },
-                    available_evidence=[],
-                )
-            self.assertFalse((root / "state.sqlite").exists())
-
     def test_full_persistence_allows_crm_call_id_outside_transcript_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -633,238 +539,6 @@ class DealFullProductionFlowTests(unittest.TestCase):
             state = get_entity_state(db_path, "deal", "7")
         self.assertEqual(run_id, saved["analysis_run_id"])
         self.assertEqual(state["last_analysis_status"], FULL_LLM_ANALYSIS)
-
-    def test_continuity_rejects_unresolved_loss_and_old_evidence_upgrade(self) -> None:
-        baseline = {
-            "deal_context": {
-                "critical_facts": [{"fact_id": "equipment", "status": "needs_confirmation", "evidence": ["call:1"]}],
-                "commitments": [{"commitment_id": "manager_check", "status": "open", "evidence": ["call:1"]}],
-                "turning_points": [{"turning_point_id": "invoice", "status": "active", "evidence": ["call:1"]}],
-                "source_conflicts": [{"description": "разный статус счёта", "sources": ["call:1"]}],
-            },
-            "main_risk": {"risk_level": "high", "risk_type": "approval"},
-        }
-        candidate = {
-            "deal_context": {
-                "critical_facts": [{"fact_id": "equipment", "status": "confirmed", "evidence": ["call:1"]}],
-                "commitments": [],
-                "turning_points": [],
-                "source_conflicts": [],
-            },
-            "main_risk": {"risk_level": "high", "risk_type": "approval"},
-        }
-        with self.assertRaisesRegex(AnalysisValidationError, "lost unresolved commitment") as raised:
-            validate_deal_analysis_continuity(
-                candidate,
-                baseline,
-                available_evidence_ids=["call:1"],
-                changed_evidence_ids=[],
-            )
-        self.assertIn("closed unresolved critical_fact without new evidence", str(raised.exception))
-        self.assertIn("lost unresolved turning_point", str(raised.exception))
-        self.assertIn("lost unresolved source conflict", str(raised.exception))
-
-    def test_continuity_accepts_explicit_new_evidence_closure(self) -> None:
-        baseline = {
-            "deal_context": {
-                "critical_facts": [{"fact_id": "equipment", "status": "needs_confirmation", "evidence": ["call:1"]}],
-                "commitments": [{"commitment_id": "manager_check", "status": "open", "evidence": ["call:1"]}],
-                "turning_points": [{"turning_point_id": "invoice", "status": "active", "evidence": ["call:1"]}],
-                "source_conflicts": [{"description": "разный статус счёта", "sources": ["call:1"]}],
-            },
-            "main_risk": {"risk_level": "high", "risk_type": "approval"},
-        }
-        candidate = {
-            "what_changed": ["resolved by call:2"],
-            "money_path_diagnosis": {"evidence": ["Звонок activity_id=2"]},
-            "deal_context": {
-                "critical_facts": [{"fact_id": "equipment", "status": "confirmed", "evidence": ["call:2"]}],
-                "commitments": [{"commitment_id": "manager_check", "status": "done", "evidence": ["call:2"]}],
-                "turning_points": [{"turning_point_id": "invoice", "status": "resolved", "evidence": ["call:2"]}],
-                "source_conflicts": [],
-            },
-            "main_risk": {"risk_level": "medium", "risk_type": "payment_delay"},
-        }
-        validate_deal_analysis_continuity(
-            candidate,
-            baseline,
-            available_evidence_ids=["call:1", "call:2"],
-            changed_evidence_ids=["call:2"],
-        )
-
-    def test_incremental_confirmation_shift_requires_new_evidence_not_full(self) -> None:
-        baseline = {
-            "qualification_assessment": {
-                "bant": {
-                    "timeframe": {
-                        "status": "missing",
-                        "decision_timing_status": "not_confirmed",
-                        "need_or_launch_timing_status": "confirmed",
-                    },
-                },
-            },
-            "deal_context": {
-                "pressure_levers": [{
-                    "lever_id": "payment_deadline",
-                    "basis_status": "needs_confirmation",
-                }],
-            },
-        }
-        upgraded = {
-            "qualification_assessment": {
-                "bant": {
-                    "timeframe": {
-                        "status": "confirmed",
-                        "decision_timing_status": "confirmed",
-                        "need_or_launch_timing_status": "confirmed",
-                        "evidence": ["call:2"],
-                    },
-                },
-            },
-            "deal_context": {
-                "pressure_levers": [{
-                    "lever_id": "payment_deadline",
-                    "basis_status": "confirmed",
-                    "evidence": ["call:2"],
-                }],
-            },
-        }
-        silent_upgrade = {
-            "qualification_assessment": {
-                "bant": {
-                    "timeframe": {
-                        "status": "confirmed",
-                        "decision_timing_status": "confirmed",
-                        "need_or_launch_timing_status": "confirmed",
-                        "evidence": ["call:1"],
-                    },
-                },
-            },
-            "deal_context": {
-                "pressure_levers": [{
-                    "lever_id": "payment_deadline",
-                    "basis_status": "confirmed",
-                    "evidence": ["call:1"],
-                }],
-            },
-        }
-        silent_downgrade = {
-            "qualification_assessment": {
-                "bant": {
-                    "timeframe": {
-                        "status": "missing",
-                        "decision_timing_status": "not_confirmed",
-                        "need_or_launch_timing_status": "not_confirmed",
-                        "evidence": ["call:1"],
-                    },
-                },
-            },
-            "deal_context": {
-                "pressure_levers": [{
-                    "lever_id": "payment_deadline",
-                    "basis_status": "needs_confirmation",
-                    "evidence": ["call:1"],
-                }],
-            },
-        }
-        cited_downgrade = {
-            "qualification_assessment": {
-                "bant": {
-                    "timeframe": {
-                        "status": "missing",
-                        "decision_timing_status": "not_confirmed",
-                        "need_or_launch_timing_status": "not_confirmed",
-                        "evidence": ["call:2"],
-                    },
-                },
-            },
-            "deal_context": {
-                "pressure_levers": [{
-                    "lever_id": "payment_deadline",
-                    "basis_status": "needs_confirmation",
-                    "evidence": ["call:2"],
-                }],
-            },
-        }
-
-        validate_deal_analysis_continuity(
-            upgraded,
-            baseline,
-            available_evidence_ids=["call:1", "call:2"],
-            changed_evidence_ids=["call:2"],
-            enforce_confirmation_evidence=True,
-        )
-        validate_deal_analysis_continuity(
-            silent_upgrade,
-            baseline,
-            available_evidence_ids=["call:1", "call:2"],
-            changed_evidence_ids=["call:2"],
-        )
-        with self.assertRaisesRegex(AnalysisValidationError, "confirmation upgrade without new evidence") as raised:
-            validate_deal_analysis_continuity(
-                silent_upgrade,
-                baseline,
-                available_evidence_ids=["call:1", "call:2"],
-                changed_evidence_ids=["call:2"],
-                enforce_confirmation_evidence=True,
-            )
-        self.assertTrue(continuity_errors_are_repairable(raised.exception))
-        self.assertNotIn("requires FULL", str(raised.exception))
-        with self.assertRaisesRegex(AnalysisValidationError, "confirmation downgrade without new evidence"):
-            validate_deal_analysis_continuity(
-                silent_downgrade,
-                {
-                    **baseline,
-                    "qualification_assessment": {
-                        "bant": {
-                            "timeframe": {
-                                "status": "confirmed",
-                                "decision_timing_status": "confirmed",
-                                "need_or_launch_timing_status": "confirmed",
-                            },
-                        },
-                    },
-                    "deal_context": {
-                        "pressure_levers": [{
-                            "lever_id": "payment_deadline",
-                            "basis_status": "confirmed",
-                        }],
-                    },
-                },
-                available_evidence_ids=["call:1", "call:2"],
-                changed_evidence_ids=["call:2"],
-                enforce_confirmation_evidence=True,
-            )
-        validate_deal_analysis_continuity(
-            cited_downgrade,
-            {
-                **baseline,
-                "qualification_assessment": {
-                    "bant": {
-                        "timeframe": {
-                            "status": "confirmed",
-                            "decision_timing_status": "confirmed",
-                            "need_or_launch_timing_status": "confirmed",
-                        },
-                    },
-                },
-                "deal_context": {
-                    "pressure_levers": [{
-                        "lever_id": "payment_deadline",
-                        "basis_status": "confirmed",
-                    }],
-                },
-            },
-            available_evidence_ids=["call:1", "call:2"],
-            changed_evidence_ids=["call:2"],
-            enforce_confirmation_evidence=True,
-        )
-
-    def test_continuity_does_not_parse_call_date_as_evidence_id(self) -> None:
-        validate_deal_analysis_continuity(
-            {"communication_quality_audit": {"scope_summary": "Звонок 28.08.2026"}},
-            available_evidence_ids=[],
-        )
 
     def test_valid_deal_analysis_passes_canonical_validator(self) -> None:
         analysis = {key: {} for key in DEAL_REQUIRED_FIELDS}

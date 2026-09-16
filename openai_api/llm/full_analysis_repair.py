@@ -47,8 +47,7 @@ LOCAL_ERROR = re.compile(
 )
 PREFIX_PATH = re.compile(rf"^({PATH})(?=\s)")
 EXPECTED_PATH = re.compile(rf"^expected ({PATH})(?=\s)")
-MAX_PACKET_CHARS = 32_000
-CANONICAL_EVIDENCE_ID = re.compile(r"^(?:call|message|email):\d+$")
+MAX_PACKET_CHARS = 100_000
 
 
 def _protected_values(value: Any, path: str = "") -> dict[str, Any]:
@@ -73,7 +72,6 @@ class SectionRepairPlan:
     sections: tuple[str, ...]
     primary: dict[str, Any]
     contract: dict[str, Any]
-    allowed_protected_values: frozenset[tuple[str, str]] | None = None
 
     def merge(self, response: dict[str, Any]) -> dict[str, Any]:
         if set(response) != {"sections"} or not isinstance(response.get("sections"), dict):
@@ -87,12 +85,8 @@ class SectionRepairPlan:
             # Same omission handling as V2; lists are complete replacements.
             _preserve_missing_object_keys(sections[key], self.primary[key], path=key, changes=[])
             _check_repair_fields(sections[key], self.primary[key], self.contract[key])
-            repaired_protected = _protected_atoms(sections[key])
-            if self.allowed_protected_values is None:
-                if _protected_values(sections[key]) != _protected_values(self.primary[key]):
-                    raise SectionRepairError("repair changed protected evidence or CRM anchors")
-            elif not repaired_protected <= self.allowed_protected_values:
-                raise SectionRepairError("repair invented protected evidence or CRM anchors")
+            if _protected_values(sections[key]) != _protected_values(self.primary[key]):
+                raise SectionRepairError("repair changed protected evidence or CRM anchors")
         return merge_sections(self.primary, sections)
 
 
@@ -113,24 +107,6 @@ def _check_repair_fields(value: Any, previous: Any, contract: Any) -> None:
         shape = contract[0] if isinstance(contract, list) and contract else None
         for index, item in enumerate(value):
             _check_repair_fields(item, old[index] if index < len(old) else None, shape)
-
-
-def _protected_atoms(value: Any) -> frozenset[tuple[str, str]]:
-    atoms: set[tuple[str, str]] = set()
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if key in {"evidence", "sources", "quote"} or key.endswith("_id") or key.startswith("crm_"):
-                values = item if key in {"evidence", "sources"} and isinstance(item, list) else [item]
-                atoms.update(
-                    (key, json.dumps(protected, ensure_ascii=False, sort_keys=True))
-                    for protected in values
-                )
-            else:
-                atoms.update(_protected_atoms(item))
-    elif isinstance(value, list):
-        for item in value:
-            atoms.update(_protected_atoms(item))
-    return frozenset(atoms)
 
 
 def _prompt_contract(full_prompt: str) -> dict[str, Any] | None:
@@ -219,98 +195,3 @@ REPAIR_PACKET
 ''' + encoded
         return SectionRepairPlan(prompt, tuple(selected), deepcopy(primary), {key: contract[key] for key in selected})
     return build
-
-
-def build_continuity_repair_plan(
-    full_prompt: str,
-    candidate: dict[str, Any],
-    error: AnalysisValidationError,
-    *,
-    baseline: dict[str, Any],
-    changed_evidence_ids: list[str],
-    new_evidence: list[dict[str, Any]] | None = None,
-) -> SectionRepairPlan | None:
-    """Build one evidence-closed repair packet for deterministic continuity errors."""
-    if not error.errors or not isinstance(candidate, dict) or not isinstance(baseline, dict):
-        return None
-    domains: set[str] = set()
-    for message in map(str, error.errors):
-        if message.startswith(("lost unresolved critical_fact", "closed unresolved critical_fact")):
-            domains.add("critical_facts")
-        elif message.startswith(("lost unresolved commitment", "closed unresolved commitment")):
-            domains.add("commitments")
-        elif message.startswith(("lost unresolved turning_point", "closed unresolved turning_point")):
-            domains.add("turning_points")
-        elif message.startswith(("lost unresolved source conflict", "lost source conflict evidence")):
-            domains.add("source_conflicts")
-        elif message.startswith(("lost unresolved deal risk", "downgraded deal risk", "replaced unresolved deal risk")):
-            domains.add("risk_state")
-        elif message.startswith(("confirmation upgrade without new evidence: bant.", "confirmation downgrade without new evidence: bant.")):
-            domains.add("qualification")
-        elif "without new evidence: commitments." in message:
-            domains.add("commitments")
-        elif "without new evidence: pressure_levers." in message:
-            domains.add("active_pressure_levers")
-        elif message.endswith("without new evidence: decision_path"):
-            domains.add("decision_path")
-        else:
-            return None
-    selected = sorted({section for domain in domains for section in DEPENDENCIES[domain]})
-    contract = _prompt_contract(full_prompt)
-    if (
-        not isinstance(contract, dict)
-        or len(selected) > 10
-        or any(section not in contract or not isinstance(candidate.get(section), (dict, list)) for section in selected)
-    ):
-        return None
-    baseline_analysis = baseline.get("analysis") if isinstance(baseline.get("analysis"), dict) else baseline
-    changed_ids = list(dict.fromkeys(
-        str(item) for item in changed_evidence_ids if CANONICAL_EVIDENCE_ID.fullmatch(str(item))
-    ))
-    allowed_new_evidence = []
-    for item in new_evidence or []:
-        evidence_id = str(item.get("evidence_id") or "") if isinstance(item, dict) else ""
-        if evidence_id not in changed_ids or not any(
-            str(item.get(key) or "").strip() for key in ("text", "transcript", "subject")
-        ):
-            continue
-        allowed_new_evidence.append({
-            key: item[key]
-            for key in ("evidence_id", "kind", "occurred_at", "subject", "text", "transcript")
-            if item.get(key) not in (None, "")
-        })
-    allowed_new_ids = [str(item["evidence_id"]) for item in allowed_new_evidence]
-    packet = {
-        "allowed_sections": selected,
-        "continuity_errors": [str(item) for item in error.errors],
-        "changed_evidence_ids": changed_ids,
-        "new_or_revised_evidence": allowed_new_evidence,
-        "baseline_sections": {key: baseline_analysis.get(key) for key in selected if key in baseline_analysis},
-        "candidate_sections": {key: candidate[key] for key in selected},
-        "section_contract": {key: contract[key] for key in selected},
-    }
-    encoded = json.dumps(packet, ensure_ascii=False, separators=(",", ":"))
-    if len(encoded) > MAX_PACKET_CHARS:
-        return None
-    prompt = '''Ты исправляешь только deterministic continuity errors готового анализа сделки.
-Не анализируй сделку заново и не добавляй факты. Для каждого affected item проверь только
-new_or_revised_evidence: если оно подтверждает закрытие, сохрани новый status и добавь его
-evidence_id; иначе восстанови unresolved baseline status. Синхронизируй только allowed_sections.
-Верни ровно JSON {"sections": {...}} для всех allowed_sections. Evidence, sources, quotes,
-CRM-поля и стабильные IDs можно только сохранить из candidate_sections или baseline_sections;
-добавить можно только canonical evidence_id из changed_evidence_ids.
-Если безопасное локальное исправление невозможно, верни {"cannot_repair":true}.
-
-CONTINUITY_REPAIR_PACKET
-''' + encoded
-    allowed = _protected_atoms({
-        "candidate": packet["candidate_sections"],
-        "baseline": packet["baseline_sections"],
-    }) | _protected_atoms({"evidence": allowed_new_ids})
-    return SectionRepairPlan(
-        prompt,
-        tuple(selected),
-        deepcopy(candidate),
-        {key: contract[key] for key in selected},
-        allowed,
-    )

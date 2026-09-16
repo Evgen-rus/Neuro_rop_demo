@@ -2291,62 +2291,6 @@ def _upsert_entity_state(conn: sqlite3.Connection, **state: Any) -> None:
         )
 
 
-def get_deal_semantic_failure(
-    db_path: str | Path,
-    *,
-    deal_id: str,
-    fingerprint: str,
-    trusted_baseline_run_id: int,
-) -> dict[str, Any] | None:
-    init_db(db_path)
-    with connect(db_path) as conn:
-        row = conn.execute(
-            """
-            SELECT * FROM deal_semantic_failures
-            WHERE deal_id = ? AND fingerprint = ? AND trusted_baseline_run_id = ?
-            """,
-            (str(deal_id), str(fingerprint), int(trusted_baseline_run_id)),
-        ).fetchone()
-    if row is None:
-        return None
-    value = dict(row)
-    value["continuity_errors"] = loads_json(value.pop("continuity_errors_json"), [])
-    return value
-
-
-def save_deal_semantic_failure(
-    db_path: str | Path,
-    *,
-    deal_id: str,
-    fingerprint: str,
-    trusted_baseline_run_id: int,
-    error_type: str,
-    continuity_errors: list[str],
-) -> None:
-    init_db(db_path)
-    with connect(db_path) as conn:
-        conn.execute(
-            """
-            INSERT INTO deal_semantic_failures (
-                deal_id, fingerprint, trusted_baseline_run_id,
-                error_type, continuity_errors_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(deal_id, fingerprint, trusted_baseline_run_id) DO UPDATE SET
-                error_type = excluded.error_type,
-                continuity_errors_json = excluded.continuity_errors_json,
-                created_at = excluded.created_at
-            """,
-            (
-                str(deal_id),
-                str(fingerprint),
-                int(trusted_baseline_run_id),
-                str(error_type),
-                dumps_json([str(item) for item in continuity_errors]),
-                utcish_now(),
-            ),
-        )
-
-
 def save_analysis_run(
     db_path: str | Path,
     *,

@@ -24,13 +24,11 @@ from openai_api.llm.analyze_deal import build_prompt as deal_prompt
 from openai_api.llm.analyze_lead import build_prompt as lead_prompt, validate_lead_analysis_for_crm_state
 from openai_api.llm.full_analysis_repair import (
     SectionRepairError,
-    build_continuity_repair_plan,
     build_full_repair_builder,
 )
 from openai_api.llm.deal_semantic_dependencies import DEPENDENCIES
 from openai_api.llm.validation import (
     AnalysisValidationError, DEAL_REQUIRED_FIELDS, normalize_analysis_for_validation, validate_deal_analysis,
-    validate_deal_analysis_continuity,
 )
 from openai_api.pricing import estimate_analysis_cost
 from reliability.retry import RetryPolicy
@@ -376,89 +374,6 @@ class FullSectionRepairTests(unittest.TestCase):
         self.assertFalse(meta["repair_invoked"])
         self.assertFalse(meta["primary_validation_failed"])
 
-    def test_continuity_repair_packet_is_bounded_and_can_restore_baseline_item(self):
-        candidate = deepcopy(self.good)
-        baseline = deepcopy(self.good)
-        candidate["deal_context"]["commitments"] = [{"commitment_id": "c17", "status": "done"}]
-        baseline["deal_context"]["commitments"] = [{"commitment_id": "c17", "status": "open"}]
-        error = AnalysisValidationError(
-            "Invalid deal analysis continuity: closed unresolved commitment without new evidence: c17",
-            errors=["closed unresolved commitment without new evidence: c17"],
-        )
-        plan = build_continuity_repair_plan(
-            self.prompt,
-            candidate,
-            error,
-            baseline={"analysis": baseline},
-            changed_evidence_ids=[],
-        )
-        self.assertIsNotNone(plan)
-        self.assertNotIn("FULL_HISTORY_SENTINEL", plan.prompt)
-        self.assertNotIn("FULL_TRANSCRIPT_SENTINEL", plan.prompt)
-        sections = {key: deepcopy(candidate[key]) for key in plan.sections}
-        sections["deal_context"]["commitments"] = deepcopy(baseline["deal_context"]["commitments"])
-        repaired = plan.merge({"sections": sections})
-        self.assertEqual(repaired["deal_context"]["commitments"][0]["status"], "open")
-
-    def test_continuity_repair_can_add_only_current_canonical_evidence(self):
-        candidate = deepcopy(self.good)
-        baseline = deepcopy(self.good)
-        candidate["deal_context"]["commitments"] = [{"commitment_id": "c17", "status": "done", "evidence": []}]
-        baseline["deal_context"]["commitments"] = [{"commitment_id": "c17", "status": "open", "evidence": []}]
-        error = AnalysisValidationError("continuity", errors=["closed unresolved commitment without new evidence: c17"])
-        plan = build_continuity_repair_plan(
-            self.prompt,
-            candidate,
-            error,
-            baseline={"analysis": baseline},
-            changed_evidence_ids=["call:668723"],
-            new_evidence=[{
-                "evidence_id": "call:668723",
-                "kind": "call_transcript",
-                "occurred_at": "2026-09-14T10:00:00+03:00",
-                "text": "Клиент подтвердил, что обсуждение состоялось.",
-            }],
-        )
-        self.assertIn("Клиент подтвердил", plan.prompt)
-        sections = {key: deepcopy(candidate[key]) for key in plan.sections}
-        sections["deal_context"]["commitments"][0]["evidence"] = ["call:668723"]
-        repaired = plan.merge({"sections": sections})
-        validate_deal_analysis_continuity(
-            repaired,
-            {"analysis": baseline},
-            changed_evidence_ids=["call:668723"],
-        )
-
-        for invented in ("call:999999", "crm_mirror:b962c3499bad81e7"):
-            with self.subTest(invented=invented), self.assertRaises(SectionRepairError):
-                bad_sections = deepcopy(sections)
-                bad_sections["deal_context"]["commitments"][0]["evidence"] = [invented]
-                plan.merge({"sections": bad_sections})
-
-    def test_continuity_repair_can_restore_unresolved_when_new_evidence_does_not_confirm(self):
-        candidate = deepcopy(self.good)
-        baseline = deepcopy(self.good)
-        candidate["deal_context"]["commitments"] = [{"commitment_id": "c17", "status": "done", "evidence": []}]
-        baseline["deal_context"]["commitments"] = [{"commitment_id": "c17", "status": "open", "evidence": []}]
-        error = AnalysisValidationError("continuity", errors=["closed unresolved commitment without new evidence: c17"])
-        plan = build_continuity_repair_plan(
-            self.prompt,
-            candidate,
-            error,
-            baseline={"analysis": baseline},
-            changed_evidence_ids=["call:668723"],
-            new_evidence=[{"evidence_id": "call:668723", "kind": "call_transcript", "text": "Обсуждали другую тему."}],
-        )
-        sections = {key: deepcopy(candidate[key]) for key in plan.sections}
-        sections["deal_context"]["commitments"] = deepcopy(baseline["deal_context"]["commitments"])
-        repaired = plan.merge({"sections": sections})
-        validate_deal_analysis_continuity(
-            repaired,
-            {"analysis": baseline},
-            changed_evidence_ids=["call:668723"],
-        )
-        self.assertEqual(repaired["deal_context"]["commitments"][0]["status"], "open")
-
     def test_local_repair_excludes_full_context_and_preserves_primary(self):
         snapshot = deepcopy(self.bad)
         result, meta = self.run_responses([self.bad, {"sections": {"rop_manager_message_block": {"deadline": "2026-08-27"}}}])
@@ -603,7 +518,7 @@ class FullSectionRepairTests(unittest.TestCase):
 
     def test_packet_overflow_declines_instead_of_truncating(self):
         bad = deepcopy(self.bad)
-        bad["rop_manager_message_block"]["evidence"] = ["EVIDENCE" * 10000]
+        bad["rop_manager_message_block"]["evidence"] = ["EVIDENCE" * 20000]
         result, meta = self.run_responses([bad, self.good])
         self.assertFalse(meta["repair_invoked"])
 
