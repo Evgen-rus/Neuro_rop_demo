@@ -15,7 +15,7 @@ from typing import Any
 from openai_api.audio.transcribe_core import get_audio_duration_seconds
 
 
-SHORT_CALL_MAX_SECONDS = 20.0
+SHORT_CALL_MAX_SECONDS = 36.0
 
 
 def load_recording_durations(manifest_paths: list[Path]) -> dict[str, float]:
