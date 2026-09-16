@@ -44,7 +44,7 @@ LEGACY_CLIENT_TONE_LABELS = {
 }
 ENTITY_EVENT_KEYS = (
     "crm_actions", "stage_changes", "task_history", "timeline_comments",
-    "business_field_changes", "stage_history",
+    "stage_history",
 )
 
 
@@ -167,7 +167,7 @@ def _activity_label(action: dict[str, Any]) -> str:
         "timeline_comment": "Комментарий CRM",
         "business_field_change": "Изменение CRM",
         "stage_change": "Смена стадии",
-        "stage_history": "История стадии",
+        "stage_history": "Смена стадии",
         "other": "CRM-событие",
     }
     return labels.get(kind, labels.get(str(action.get("action_type") or "").lower(), kind.replace("_", " ")))
@@ -377,7 +377,7 @@ def _manager_events(manager: dict[str, Any]) -> list[dict[str, Any]]:
     for entity in manager.get("workday", {}).get("entities") or []:
         for key in (
             "crm_actions", "stage_changes", "task_history", "timeline_comments",
-            "business_field_changes", "stage_history",
+            "stage_history",
         ):
             for action in entity.get(key) or []:
                 event = _base_event(action, metadata)
@@ -729,7 +729,7 @@ def build_event_detail_projection(
     for entity in manager.get("workday", {}).get("entities") or []:
         for key in (
             "crm_actions", "stage_changes", "task_history", "timeline_comments",
-            "business_field_changes", "stage_history",
+            "stage_history",
         ):
             for action in entity.get(key) or []:
                 if str(action.get("event_id") or "") != str(event_id):
@@ -826,9 +826,6 @@ def _recompute_manager_export_aggregates(manager: dict[str, Any]) -> dict[str, A
     stage_changes = [item for entity in entities for item in entity.get("stage_changes") or []]
     task_history = [item for entity in entities for item in entity.get("task_history") or []]
     timeline_comments = [item for entity in entities for item in entity.get("timeline_comments") or []]
-    business_field_changes = [
-        item for entity in entities for item in entity.get("business_field_changes") or []
-    ]
     stage_history = [item for entity in entities for item in entity.get("stage_history") or []]
     product_usage = dict(manager.get("product_usage") or {})
     recommendations = list(product_usage.get("recommendations") or [])
@@ -847,8 +844,6 @@ def _recompute_manager_export_aggregates(manager: dict[str, Any]) -> dict[str, A
         counts["crm_task_history_observed"] = len(task_history)
     if timeline_comments:
         counts["crm_timeline_comment_observed"] = len(timeline_comments)
-    if business_field_changes:
-        counts["crm_business_field_changed"] = len(business_field_changes)
     if stage_history:
         counts["crm_stage_history_observed"] = len(stage_history)
     viewed = sum(len(item.get("view_occurrences") or item.get("viewed_at") or []) for item in recommendations)
@@ -869,7 +864,6 @@ def _recompute_manager_export_aggregates(manager: dict[str, Any]) -> dict[str, A
         "stage_changes": len(stage_changes),
         "task_history_events": len(task_history),
         "timeline_comments": len(timeline_comments),
-        "business_field_changes": len(business_field_changes),
         "stage_history_events": len(stage_history),
         "system_creation_events": 0,
         "presence_snapshots": [],

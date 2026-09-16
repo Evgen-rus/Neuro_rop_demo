@@ -822,31 +822,15 @@ def build_manager_trajectory_report(
     excluded_unverified_total = 0
     for manager_id in managers:
         rows = [item for item in events if str(item.get("manager_id") or "") == manager_id]
-        unverified_lifecycle = [
+        report_rows = [
             item for item in rows
-            if item.get("event_type") in {"recommendation_shown", "recommendation_viewed", "quick_help_opened"}
-            and not _verified_manager_actor(item, manager_id)
-        ]
-        excluded_unverified_total += len(unverified_lifecycle)
-        counted_rows = [
-            item for item in rows
-            if item.get("event_type") not in {"recommendation_shown", "recommendation_viewed", "quick_help_opened"}
-            or _verified_manager_actor(item, manager_id)
-        ]
-        counts: dict[str, int] = {}
-        for item in counted_rows:
-            event_type = str(item.get("event_type") or "")
-            counts[event_type] = counts.get(event_type, 0) + 1
-        crm_actions = _unique_crm_actions(rows)
-        stage_actions = [
-            _stage_action(item) for item in rows
-            if item.get("event_type") in {"deal_stage_changed", "lead_stage_changed"}
+            if item.get("event_type") != "crm_business_field_changed"
         ]
         detail_actions = [
-            _detail_action(item) for item in rows
+            _detail_action(item) for item in report_rows
             if item.get("event_type") in {
                 "crm_task_history_observed", "crm_timeline_comment_observed",
-                "crm_business_field_changed", "crm_stage_history_observed",
+                "crm_stage_history_observed",
             }
         ]
         stage_history_all = [
@@ -867,8 +851,60 @@ def build_manager_trajectory_report(
                 item["from_stage_id"] = previous_stage_id
                 previous_stage_id = item.get("to_stage_id")
         system_creation_events = [item for item in stage_history_all if item.get("is_system_creation")]
-        manager_detail_actions = [item for item in detail_actions if not item.get("is_system_creation")]
         stage_history = [item for item in stage_history_all if not item.get("is_system_creation")]
+        exact_history: dict[tuple[str, str, str, str], int] = {}
+        target_only_history: dict[tuple[str, str, str], int] = {}
+        for item in stage_history:
+            target_key = (
+                str(item.get("entity_type") or ""), str(item.get("entity_id") or ""),
+                str(item.get("to_stage_id") or ""),
+            )
+            from_stage_id = str(item.get("from_stage_id") or "")
+            if from_stage_id:
+                key = (*target_key[:2], from_stage_id, target_key[2])
+                exact_history[key] = exact_history.get(key, 0) + 1
+            else:
+                target_only_history[target_key] = target_only_history.get(target_key, 0) + 1
+        stage_actions: list[dict[str, Any]] = []
+        suppressed_stage_event_ids: set[int] = set()
+        for item in report_rows:
+            if item.get("event_type") not in {"deal_stage_changed", "lead_stage_changed"}:
+                continue
+            action = _stage_action(item)
+            exact_key = (
+                action["entity_type"], action["entity_id"],
+                str(action.get("from_stage_id") or ""), str(action.get("to_stage_id") or ""),
+            )
+            target_key = (exact_key[0], exact_key[1], exact_key[3])
+            if exact_history.get(exact_key, 0):
+                exact_history[exact_key] -= 1
+                suppressed_stage_event_ids.add(action["event_id"])
+            elif target_only_history.get(target_key, 0):
+                target_only_history[target_key] -= 1
+                suppressed_stage_event_ids.add(action["event_id"])
+            else:
+                stage_actions.append(action)
+        visible_rows = [
+            item for item in report_rows
+            if int(item["id"]) not in suppressed_stage_event_ids
+        ]
+        unverified_lifecycle = [
+            item for item in visible_rows
+            if item.get("event_type") in {"recommendation_shown", "recommendation_viewed", "quick_help_opened"}
+            and not _verified_manager_actor(item, manager_id)
+        ]
+        excluded_unverified_total += len(unverified_lifecycle)
+        counted_rows = [
+            item for item in visible_rows
+            if item.get("event_type") not in {"recommendation_shown", "recommendation_viewed", "quick_help_opened"}
+            or _verified_manager_actor(item, manager_id)
+        ]
+        counts: dict[str, int] = {}
+        for item in counted_rows:
+            event_type = str(item.get("event_type") or "")
+            counts[event_type] = counts.get(event_type, 0) + 1
+        crm_actions = _unique_crm_actions(visible_rows)
+        manager_detail_actions = [item for item in detail_actions if not item.get("is_system_creation")]
         # Имена берём из актуальной карты в момент отчёта, а не из payload сбора.
         for item in (*stage_actions, *stage_history_all):
             item["from_stage_name"] = _stage_label(item.get("from_stage_id"), stage_names)
@@ -940,11 +976,6 @@ def build_manager_trajectory_report(
                     if item["event_type"] == "crm_timeline_comment_observed"
                     and item["entity_type"] == entity_type and item["entity_id"] == entity_id
                 ],
-                "business_field_changes": [
-                    item for item in manager_detail_actions
-                    if item["event_type"] == "crm_business_field_changed"
-                    and item["entity_type"] == entity_type and item["entity_id"] == entity_id
-                ],
                 "stage_history": [
                     item for item in stage_history
                     if item["entity_type"] == entity_type and item["entity_id"] == entity_id
@@ -956,8 +987,8 @@ def build_manager_trajectory_report(
             viewed_at = datetime.fromisoformat(str(event["occurred_at"]).replace("Z", "+00:00"))
             window_end = viewed_at + timedelta(minutes=60)
             observed = [
-                item for item in rows
-                if item.get("source") == "bitrix"
+                item for item in visible_rows
+                if str(item.get("source") or "").startswith("bitrix")
                 and viewed_at <= datetime.fromisoformat(str(item["occurred_at"]).replace("Z", "+00:00")) <= window_end
             ]
             target = [
@@ -978,7 +1009,7 @@ def build_manager_trajectory_report(
             "manager_id": manager_id,
             "manager_name": manager_names.get(manager_id),
             "counts": counts,
-            "entities": len({(item.get("entity_type"), item.get("entity_id")) for item in rows}),
+            "entities": len({(item.get("entity_type"), item.get("entity_id")) for item in visible_rows}),
             "excluded_unverified_lifecycle_events": len(unverified_lifecycle),
             "quick_help_generated": sum(
                 item.get("event_type") == "recommendation_generated"
@@ -992,7 +1023,6 @@ def build_manager_trajectory_report(
                 "stage_changes": len(stage_actions),
                 "task_history_events": counts.get("crm_task_history_observed", 0),
                 "timeline_comments": counts.get("crm_timeline_comment_observed", 0),
-                "business_field_changes": counts.get("crm_business_field_changed", 0),
                 "stage_history_events": len(stage_history),
                 "system_creation_events": len(system_creation_events),
                 "presence_snapshots": [

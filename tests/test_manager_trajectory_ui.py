@@ -22,6 +22,7 @@ from setup import MSK_TZ
 from storage.rop_db import (
     get_saved_deal_manager_quick_help,
     init_db,
+    list_manager_trajectory_events,
     list_saved_deal_manager_channel_scripts,
     observe_manager_trajectory_business_snapshot,
     record_manager_trajectory_event,
@@ -518,7 +519,7 @@ class ManagerTrajectoryUiProjectionTests(_ManagerTrajectoryUiFixture):
         self.assertEqual(facts["Предыдущая стадия"], "UC_UNKNOWN")
         self.assertEqual(facts["Новая стадия"], "Не удалось связаться")
 
-    def test_business_field_change_detail_is_human_readable(self) -> None:
+    def test_technical_field_changes_stay_in_storage_and_stage_history_wins_everywhere(self) -> None:
         observed = observe_manager_trajectory_business_snapshot(
             self.db_path, entity_type="lead", entity_id="202", manager_id="10",
             snapshot={"TITLE": "Лид Бета", "STATUS_ID": "IN_PROCESS"},
@@ -529,15 +530,68 @@ class ManagerTrajectoryUiProjectionTests(_ManagerTrajectoryUiFixture):
             item for item in observed["events"]
             if item["payload"]["field_name"] == "STATUS_ID"
         )
-
-        detail = build_event_detail_projection(
-            manager_id="10", event_id=str(status_change["id"]), value=DAY, db_path=self.db_path,
+        creation = record_manager_trajectory_event(
+            self.db_path, entity_type="lead", entity_id="202", manager_id="10",
+            event_type="crm_stage_history_observed", source="bitrix_stage_history",
+            source_event_key="lead-created-for-dedup", occurred_at=(START + timedelta(minutes=30)).isoformat(),
+            payload={"history_type_id": "1", "stage_id": "NEW"},
+        )
+        history = record_manager_trajectory_event(
+            self.db_path, entity_type="lead", entity_id="202", manager_id="10",
+            event_type="crm_stage_history_observed", source="bitrix_stage_history",
+            source_event_key="lead-history-for-dedup", occurred_at=(START + timedelta(minutes=45)).isoformat(),
+            payload={"history_type_id": "2", "stage_id": "IN_PROCESS"},
+        )
+        fallback = record_manager_trajectory_event(
+            self.db_path, entity_type="lead", entity_id="202", manager_id="10",
+            event_type="lead_stage_changed", source="bitrix",
+            source_event_key="lead-fallback-for-dedup", occurred_at=(START + timedelta(minutes=45)).isoformat(),
+            payload={"from_stage_id": "NEW", "to_stage_id": "IN_PROCESS"},
         )
 
-        facts = {item["label"]: item["value"] for item in detail["details"]}
-        self.assertEqual(facts["Поле"], "STATUS_ID")
-        self.assertEqual(facts["Было"], "NEW")
-        self.assertEqual(facts["Стало"], "IN_PROCESS")
+        stored = list_manager_trajectory_events(
+            self.db_path,
+            from_at=datetime.combine(DAY, datetime.min.time(), tzinfo=MSK_TZ).isoformat(),
+            to_at=datetime.combine(DAY + timedelta(days=1), datetime.min.time(), tzinfo=MSK_TZ).isoformat(),
+            manager_ids=["10"],
+        )
+        self.assertIn(status_change["id"], {item["id"] for item in stored})
+
+        day = build_day_projection(value=DAY, db_path=self.db_path)
+        crm = build_day_projection(value=DAY, category="crm", db_path=self.db_path)
+        window = build_window_projection(
+            manager_id="10", from_at=START, to_at=START + timedelta(hours=1), db_path=self.db_path,
+        )
+        entity = build_entity_projection(entity_type="lead", entity_id="202", value=DAY, db_path=self.db_path)
+        export = build_day_export(value=DAY, db_path=self.db_path)
+
+        self.assertEqual(day["totals"]["events"], 5)
+        self.assertEqual(day["totals"]["crm"], 1)
+        self.assertEqual(crm["totals"]["events"], 1)
+        visible_ids = {item["event_id"] for item in window["events"]}
+        self.assertIn(history["id"], visible_ids)
+        self.assertNotIn(creation["id"], visible_ids)
+        self.assertNotIn(fallback["id"], visible_ids)
+        self.assertNotIn(status_change["id"], visible_ids)
+        self.assertEqual(
+            [item["label"] for item in entity["chronology"]],
+            ["Письмо", "Смена стадии"],
+        )
+        exported_manager = export["managers"][0]
+        exported_lead = next(
+            item for item in exported_manager["workday"]["entities"] if item["entity_id"] == "202"
+        )
+        self.assertNotIn("crm_business_field_changed", exported_manager["counts"])
+        self.assertNotIn("lead_stage_changed", exported_manager["counts"])
+        self.assertNotIn("business_field_changes", exported_manager["workday"])
+        self.assertNotIn("business_field_changes", exported_lead)
+        self.assertEqual(exported_lead["stage_changes"], [])
+        self.assertEqual([item["event_id"] for item in exported_lead["stage_history"]], [history["id"]])
+
+        with self.assertRaisesRegex(LookupError, "Событие не найдено"):
+            build_event_detail_projection(
+                manager_id="10", event_id=str(status_change["id"]), value=DAY, db_path=self.db_path,
+            )
 
     def test_filters_and_entity_projection_are_lazy(self) -> None:
         day = build_day_projection(value=DAY, category="leads", query="Бета", db_path=self.db_path)
