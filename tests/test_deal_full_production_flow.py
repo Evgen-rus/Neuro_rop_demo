@@ -78,14 +78,14 @@ class DealFullProductionFlowTests(unittest.TestCase):
         self.assertNotEqual(decision.status, MINI_RECOMMENDATION_NO_LLM)
         self.assertEqual(compact_decision_status(decision.status), "full")
 
-    def test_closed_deal_is_direct_full(self) -> None:
+    def test_closed_deal_is_local_mini(self) -> None:
         decision = decide_deal_processing(
             previous_state=_previous_state(),
             current_snapshot={"deal": {"closed": "Y"}, "activities": [], "timeline_comments": [], "commercial": {}},
             fingerprint="new",
             diff={"changes": ["stage_changed", "closed_flag_changed"], "details": {}},
         )
-        self.assertEqual(decision.status, FULL_LLM_ANALYSIS)
+        self.assertEqual(decision.status, MINI_RECOMMENDATION_NO_LLM)
 
     def test_default_full_decision_runs_without_incremental_context(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

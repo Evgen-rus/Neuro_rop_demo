@@ -26,7 +26,6 @@ INCREMENTAL_LLM_ANALYSIS = "INCREMENTAL_LLM_ANALYSIS"
 ERROR = "ERROR"
 
 HARD_CHANGE_TYPES = {
-    "commercial_refs_changed",
     "transcript_changed",
     "daily_quality_evidence_changed",
     "daily_quality_evidence_removed",
@@ -284,6 +283,9 @@ def soft_diff_triggers(diff: dict[str, Any]) -> list[dict[str, Any]]:
         "new_task": "new_task_without_llm",
         "task_deadline_changed": "task_deadline_changed_without_llm",
         "task_completed_changed": "task_completed_changed_without_llm",
+        "amount_changed": "amount_changed_without_llm",
+        "closed_flag_changed": "closed_flag_changed_without_llm",
+        "commercial_refs_changed": "commercial_refs_changed_without_llm",
         "assigned_manager_changed": "assigned_manager_changed_without_llm",
         "activity_updated": "activity_updated_without_llm",
         "comment_updated": "comment_updated_without_llm",
@@ -314,20 +316,6 @@ def _is_inbound_customer_direction(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "in", "incoming", "входящий"}
 
 
-def _significant_amount_change(diff: dict[str, Any]) -> bool:
-    details = (diff.get("details") or {}).get("amount_changed") or {}
-    try:
-        before = float(str(details.get("before") or "0").replace(",", "."))
-        after = float(str(details.get("after") or "0").replace(",", "."))
-    except (TypeError, ValueError):
-        return False
-    if before == after:
-        return False
-    if before == 0 or after == 0:
-        return True
-    return abs(after - before) / abs(before) >= 0.10
-
-
 def deal_full_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str, Any]) -> list[str]:
     """Return only evidence-backed changes that justify a new paid deal analysis.
 
@@ -348,10 +336,6 @@ def deal_full_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str,
         for activity_id in new_ids
     ):
         hard.append("new_inbound_customer_message")
-    if "closed_flag_changed" in changes and str((current_snapshot.get("deal") or {}).get("closed") or "").upper() == "Y":
-        hard.append("deal_closed")
-    if "amount_changed" in changes and _significant_amount_change(diff):
-        hard.append("significant_amount_changed")
     return sorted(set(hard))
 
 
@@ -491,6 +475,9 @@ def trigger_label(trigger: dict[str, Any]) -> str:
         "new_task_without_llm": "Добавлена новая задача",
         "task_deadline_changed_without_llm": "Изменился срок задачи",
         "task_completed_changed_without_llm": "Изменился статус задачи",
+        "amount_changed_without_llm": "Изменилась сумма сделки",
+        "closed_flag_changed_without_llm": "Изменился признак закрытия сделки",
+        "commercial_refs_changed_without_llm": "Изменились КП, счёт, договор или другие коммерческие материалы",
         "assigned_manager_changed_without_llm": "Изменился ответственный",
         "activity_updated_without_llm": "Обновлена активность без hard-признаков",
         "comment_updated_without_llm": "Обновлен комментарий",

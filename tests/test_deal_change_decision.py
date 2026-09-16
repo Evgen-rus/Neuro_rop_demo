@@ -200,16 +200,29 @@ class DealChangeDecisionTests(unittest.TestCase):
         self.assertEqual(outgoing.status, MINI_RECOMMENDATION_NO_LLM)
         self.assertEqual(comment.status, MINI_RECOMMENDATION_NO_LLM)
 
-    def test_closed_deal_and_substantial_amount_change_start_full_analysis(self):
-        closed = decision({"changes": ["stage_changed", "closed_flag_changed"], "details": {}}, snapshot(closed="Y"))
-        amount = decision(
-            {"changes": ["amount_changed"], "details": {"amount_changed": {"before": "100000", "after": "120000"}}},
-            snapshot(),
+    def test_amount_closure_and_commercial_changes_stay_local(self):
+        cases = (
+            (
+                "significant amount",
+                {"changes": ["amount_changed"], "details": {"amount_changed": {"before": "100000", "after": "120000"}}},
+                snapshot(),
+                "amount_changed_without_llm",
+            ),
+            (
+                "closed deal",
+                {"changes": ["stage_changed", "closed_flag_changed"], "details": {}},
+                snapshot(closed="Y"),
+                "closed_flag_changed_without_llm",
+            ),
+            (
+                "commercial materials",
+                {"changes": ["commercial_refs_changed"], "details": {"commercial_refs_changed": ["commercial_file_refs_hash"]}},
+                snapshot(),
+                "commercial_refs_changed_without_llm",
+            ),
         )
-        minor = decision(
-            {"changes": ["amount_changed"], "details": {"amount_changed": {"before": "100000", "after": "105000"}}},
-            snapshot(),
-        )
-        self.assertEqual(closed.status, FULL_LLM_ANALYSIS)
-        self.assertEqual(amount.status, FULL_LLM_ANALYSIS)
-        self.assertEqual(minor.status, MINI_RECOMMENDATION_NO_LLM)
+        for label, diff, current, trigger_type in cases:
+            with self.subTest(label=label):
+                result = decision(diff, current)
+                self.assertEqual(result.status, MINI_RECOMMENDATION_NO_LLM)
+                self.assertIn(trigger_type, [row["trigger_type"] for row in result.triggers])
