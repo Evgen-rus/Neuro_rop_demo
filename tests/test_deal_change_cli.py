@@ -304,26 +304,41 @@ class DealChangeCliTests(unittest.TestCase):
         self.assertIsNone(analyzer.call_args.kwargs.get("incremental_context"))
         self.assertEqual(persist.call_args.kwargs["decision_status"], FULL_LLM_ANALYSIS)
 
-    def test_commercial_and_incomplete_source_still_use_patch_when_baseline_is_safe(self) -> None:
-        cases = (
-            ("commercial", {"changes": ["commercial_refs_changed"], "details": {}}, {}),
-            ("failed source", {"changes": ["transcript_changed"], "details": {}}, {"activities": "failed"}),
+    def test_commercial_refs_changed_keeps_full_when_baseline_is_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            analyzer, persist = self._run_main(
+                Path(directory),
+                incremental_enabled=True,
+                decision=ProcessingDecision(
+                    status=FULL_LLM_ANALYSIS,
+                    reasons=["commercial"],
+                    triggers=[],
+                    diff={"changes": ["commercial_refs_changed"], "details": {}},
+                ),
+            )
+        analyzer.assert_called_once()
+        self.assertIsNone(analyzer.call_args.kwargs.get("incremental_context"))
+        self.assertEqual(persist.call_args.kwargs["decision_status"], FULL_LLM_ANALYSIS)
+        self.assertEqual(
+            persist.call_args.kwargs["decision_reason"]["fallback_reason"],
+            "commercial_delta_requires_full",
         )
-        for label, diff, source_status in cases:
-            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
-                analyzer, persist = self._run_main(
-                    Path(directory),
-                    incremental_enabled=True,
-                    source_status=source_status,
-                    decision=ProcessingDecision(
-                        status=FULL_LLM_ANALYSIS,
-                        reasons=[label],
-                        triggers=[],
-                        diff=diff,
-                    ),
-                )
-            self.assertIsNotNone(analyzer.call_args.kwargs.get("incremental_context"))
-            self.assertEqual(persist.call_args.kwargs["decision_status"], INCREMENTAL_LLM_ANALYSIS)
+
+    def test_incomplete_source_still_uses_patch_when_baseline_is_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            analyzer, persist = self._run_main(
+                Path(directory),
+                incremental_enabled=True,
+                source_status={"activities": "failed"},
+                decision=ProcessingDecision(
+                    status=FULL_LLM_ANALYSIS,
+                    reasons=["failed source"],
+                    triggers=[],
+                    diff={"changes": ["transcript_changed"], "details": {}},
+                ),
+            )
+        self.assertIsNotNone(analyzer.call_args.kwargs.get("incremental_context"))
+        self.assertEqual(persist.call_args.kwargs["decision_status"], INCREMENTAL_LLM_ANALYSIS)
 
     def test_size_no_longer_falls_back_to_full(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

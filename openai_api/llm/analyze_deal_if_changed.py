@@ -506,16 +506,25 @@ def stage5_inputs(
     return baseline, canonical_state, canonical_delta, available_evidence
 
 
+# Только клиентские тексты, которые evidence_delta умеет классифицировать.
+# Раньше фильтр требовал уже покрытый ID или call_transcript — новое письмо/сообщение
+# не доходило до NEW_OR_REVISED_CLIENT_EVIDENCE.
+INCREMENTAL_CLIENT_EVIDENCE_KINDS = frozenset({
+    "call_transcript",
+    "inbound_message",
+    "inbound_email",
+})
+
+
 def incremental_context(
     baseline: dict[str, Any],
     canonical_state: dict[str, Any],
     canonical_delta: dict[str, Any],
     available_evidence: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    covered_ids = set(baseline["evidence_coverage"])
     delta_evidence = [
         item for item in available_evidence
-        if item.get("evidence_id") in covered_ids or item.get("kind") == "call_transcript"
+        if item.get("kind") in INCREMENTAL_CLIENT_EVIDENCE_KINDS
     ]
     revised_evidence, next_coverage = evidence_delta(
         delta_evidence,
@@ -617,6 +626,8 @@ def main() -> None:
         incremental_blocker = None
         if baseline is None:
             incremental_blocker = "unsafe_trusted_baseline"
+        elif "commercial_refs_changed" in set(decision.diff.get("changes") or []):
+            incremental_blocker = "commercial_delta_requires_full"
         elif args.force_llm:
             incremental_blocker = "forced_full"
 
