@@ -567,7 +567,7 @@ _AUTOMATIC_FALLBACK_LABELS = {
 
 
 def _automatic_decision_reasons(value: Any) -> list[str]:
-    """Project known decision reasons; never return diff payloads or exception text."""
+    """Project known labels; unknown machine codes stay as codes. Never return payloads or exception text."""
     decision = value if isinstance(value, dict) else {}
     raw_reasons = decision.get("reasons") if isinstance(value, dict) else value
     reasons: list[str] = []
@@ -581,13 +581,18 @@ def _automatic_decision_reasons(value: Any) -> list[str]:
         elif reason.startswith(("Обнаружены hard-изменения для прямого FULL: ",
                                 "Обнаружены новые evidence для incremental-анализа: ")):
             for code in reason.split(": ", 1)[1].rstrip(".").split(", "):
-                reasons.append(_AUTOMATIC_CHANGE_LABELS.get(code, "Сохранённый тип изменения не распознан"))
+                if code:
+                    reasons.append(_AUTOMATIC_CHANGE_LABELS.get(code, code))
         elif reason.startswith("Безопасный FULL fallback: "):
             code = reason.removeprefix("Безопасный FULL fallback: ").removesuffix(".")
             fallback = _AUTOMATIC_FALLBACK_LABELS.get(code)
-            if not fallback and code.startswith("v2:"):
-                fallback = "Инкрементальный анализ V2 не завершён или не прошёл проверку"
-            reasons.append(f"Переход к FULL: {fallback or 'сохранённая причина перехода не распознана'}")
+            if fallback:
+                reasons.append(f"Переход к FULL: {fallback}")
+            elif code.startswith("v2:"):
+                # v2-хвост может содержать текст исключения — в UI уходит только метка.
+                reasons.append("Переход к FULL: Инкрементальный анализ V2 не завершён или не прошёл проверку")
+            elif code:
+                reasons.append(code)
         elif reason == "Hard-изменений для LLM нет, но есть soft-изменения или контрольные триггеры.":
             reasons.append("Изменения или контрольные триггеры не требуют LLM")
         elif reason.startswith("V2 evidence identity подтвердил, что выбранное представление транскрипта уже покрыто предыдущим анализом."):
@@ -601,11 +606,10 @@ def _automatic_decision_reasons(value: Any) -> list[str]:
         if not isinstance(trigger, dict) or not isinstance(trigger.get("trigger_type"), str):
             continue
         label = trigger_label({"trigger_type": trigger["trigger_type"]})
-        if label == trigger["trigger_type"]:
-            label = "Сохранённый контрольный триггер не распознан"
-        elif trigger["trigger_type"] == "soft_change_without_llm":
+        if trigger["trigger_type"] == "soft_change_without_llm":
             change = trigger.get("change")
-            label = _AUTOMATIC_CHANGE_LABELS.get(change, label) if isinstance(change, str) else label
+            if isinstance(change, str) and change:
+                label = _AUTOMATIC_CHANGE_LABELS.get(change, change)
         reasons.append(label)
     return list(dict.fromkeys(reasons)) or ["Причина для этого запуска не сохранена"]
 

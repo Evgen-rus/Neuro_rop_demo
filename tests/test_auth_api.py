@@ -519,14 +519,44 @@ class AutomaticAnalysisAccessTests(unittest.TestCase):
                     "reasons": ["Безопасный FULL fallback: v2:RuntimeError:private exception payload."],
                 }},
                 {"entity_id": "303", "decision_status": "mini", "decision_reason": {
-                    "reasons": "malformed", "triggers": [None, {"trigger_type": "private unknown"}],
+                    "reasons": "malformed", "triggers": [None, {"trigger_type": "unknown_control_trigger"}],
                 }},
             ])
         self.assertTrue(details[0]["incremental"])
         self.assertEqual(details[0]["title"], "Сделка 101")
         self.assertEqual(details[0]["reasons"], ["Причина для этого запуска не сохранена"])
         self.assertIn("V2", details[1]["reasons"][0])
+        self.assertEqual(details[2]["reasons"], ["unknown_control_trigger"])
         self.assertNotIn("private", json.dumps(details))
+
+    def test_details_keep_known_labels_and_show_unknown_machine_codes(self) -> None:
+        items = [
+            {"entity_id": "101", "decision_status": "full", "decision_reason": {
+                "reasons": [
+                    "Обнаружены hard-изменения для прямого FULL: daily_quality_evidence_changed, transcript_changed.",
+                    "Безопасный FULL fallback: unsafe_trusted_baseline.",
+                ],
+            }},
+            {"entity_id": "202", "decision_status": "mini", "decision_reason": {
+                "reasons": ["Hard-изменений для LLM нет, но есть soft-изменения или контрольные триггеры."],
+                "triggers": [
+                    {"trigger_type": "unknown_control_trigger"},
+                    {"trigger_type": "soft_change_without_llm", "change": "new_client_reply"},
+                ],
+            }},
+        ]
+        with patch.object(access, "_deal_rows", return_value=[]):
+            details = access.automatic_analysis_details_payload(items)
+        self.assertEqual(details[0]["reasons"], [
+            "daily_quality_evidence_changed",
+            "Изменилась расшифровка разговора",
+            "unsafe_trusted_baseline",
+        ])
+        self.assertEqual(details[1]["reasons"], [
+            "Изменения или контрольные триггеры не требуют LLM",
+            "unknown_control_trigger",
+            "new_client_reply",
+        ])
 
     def test_latest_details_are_admin_only_but_other_roles_keep_refresh_snapshot(self) -> None:
         from fastapi.testclient import TestClient
