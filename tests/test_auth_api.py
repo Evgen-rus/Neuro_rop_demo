@@ -550,13 +550,40 @@ class AutomaticAnalysisAccessTests(unittest.TestCase):
         self.assertEqual(details[0]["reasons"], [
             "daily_quality_evidence_changed",
             "Изменилась расшифровка разговора",
-            "unsafe_trusted_baseline",
+            "Переход к FULL: Нет надёжной базы для инкрементального обновления",
         ])
         self.assertEqual(details[1]["reasons"], [
             "Изменения или контрольные триггеры не требуют LLM",
             "unknown_control_trigger",
             "new_client_reply",
         ])
+
+    def test_details_show_persisted_fallback_reason_without_diff_payloads(self) -> None:
+        items = [
+            {"entity_id": "21403", "decision_status": "full", "engine_status": "FULL_LLM_ANALYSIS", "decision_reason": {
+                "reasons": [
+                    "Обнаружены hard-изменения для прямого FULL: daily_quality_evidence_changed, new_client_reply.",
+                ],
+                "fallback": True,
+                "fallback_reason": "commercial_delta_requires_full",
+                "diff": {"changes": ["commercial_refs_changed"], "details": {"private": "must not cross"}},
+            }},
+            {"entity_id": "202", "decision_status": "full", "decision_reason": {
+                "reasons": ["Обнаружены hard-изменения для прямого FULL: transcript_changed."],
+                "fallback": True,
+                "fallback_reason": "RuntimeError:private exception payload",
+            }},
+        ]
+        with patch.object(access, "_deal_rows", return_value=[]):
+            details = access.automatic_analysis_details_payload(items)
+        self.assertEqual(details[0]["reasons"], [
+            "daily_quality_evidence_changed",
+            "new_client_reply",
+            "Переход к FULL: Инкрементальный анализ пока не умеет изменения КП, счёта или договора",
+        ])
+        self.assertEqual(details[1]["reasons"], ["Изменилась расшифровка разговора"])
+        self.assertNotIn("private", json.dumps(details))
+        self.assertNotIn("RuntimeError", json.dumps(details))
 
     def test_latest_details_are_admin_only_but_other_roles_keep_refresh_snapshot(self) -> None:
         from fastapi.testclient import TestClient

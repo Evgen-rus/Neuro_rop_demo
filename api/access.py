@@ -563,7 +563,30 @@ _AUTOMATIC_FALLBACK_LABELS = {
     "transcript_changed_in_place": "Изменён текст уже существующей расшифровки",
     "transcript_evidence_identity_missing": "Не удалось установить источник расшифровки",
     "no_materialized_new_events": "Не удалось подготовить новые события для инкрементального анализа",
+    "commercial_delta_requires_full": "Инкрементальный анализ пока не умеет изменения КП, счёта или договора",
+    "unsafe_trusted_baseline": "Нет надёжной базы для инкрементального обновления",
+    "forced_full": "Запрошен принудительный полный анализ",
+    "incremental_execution_failed": "Инкрементальный анализ завершился ошибкой",
+    "incremental_feature_disabled": "Инкрементальный анализ отключён в настройках",
+    "incremental_patch_invalid": "Инкрементальный PATCH не прошёл проверку",
 }
+
+
+def _is_machine_reason_code(code: str) -> bool:
+    return bool(code) and code[0].isalpha() and all(ch.islower() or ch.isdigit() or ch == "_" for ch in code)
+
+
+def _fallback_reason_text(code: str) -> str | None:
+    """Human label, bare machine code, or None if the value may contain exception text."""
+    label = _AUTOMATIC_FALLBACK_LABELS.get(code)
+    if label:
+        return f"Переход к FULL: {label}"
+    if code.startswith("v2:"):
+        # v2-хвост может содержать текст исключения — в UI уходит только метка.
+        return "Переход к FULL: Инкрементальный анализ V2 не завершён или не прошёл проверку"
+    if _is_machine_reason_code(code):
+        return code
+    return None
 
 
 def _automatic_decision_reasons(value: Any) -> list[str]:
@@ -584,15 +607,11 @@ def _automatic_decision_reasons(value: Any) -> list[str]:
                 if code:
                     reasons.append(_AUTOMATIC_CHANGE_LABELS.get(code, code))
         elif reason.startswith("Безопасный FULL fallback: "):
-            code = reason.removeprefix("Безопасный FULL fallback: ").removesuffix(".")
-            fallback = _AUTOMATIC_FALLBACK_LABELS.get(code)
-            if fallback:
-                reasons.append(f"Переход к FULL: {fallback}")
-            elif code.startswith("v2:"):
-                # v2-хвост может содержать текст исключения — в UI уходит только метка.
-                reasons.append("Переход к FULL: Инкрементальный анализ V2 не завершён или не прошёл проверку")
-            elif code:
-                reasons.append(code)
+            fallback_text = _fallback_reason_text(
+                reason.removeprefix("Безопасный FULL fallback: ").removesuffix(".")
+            )
+            if fallback_text:
+                reasons.append(fallback_text)
         elif reason == "Hard-изменений для LLM нет, но есть soft-изменения или контрольные триггеры.":
             reasons.append("Изменения или контрольные триггеры не требуют LLM")
         elif reason.startswith("V2 evidence identity подтвердил, что выбранное представление транскрипта уже покрыто предыдущим анализом."):
@@ -611,6 +630,11 @@ def _automatic_decision_reasons(value: Any) -> list[str]:
             if isinstance(change, str) and change:
                 label = _AUTOMATIC_CHANGE_LABELS.get(change, change)
         reasons.append(label)
+    fallback_code = decision.get("fallback_reason")
+    if isinstance(fallback_code, str):
+        fallback_text = _fallback_reason_text(fallback_code)
+        if fallback_text:
+            reasons.append(fallback_text)
     return list(dict.fromkeys(reasons)) or ["Причина для этого запуска не сохранена"]
 
 
