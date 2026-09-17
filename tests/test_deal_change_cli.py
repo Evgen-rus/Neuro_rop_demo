@@ -287,18 +287,33 @@ class DealChangeCliTests(unittest.TestCase):
         analyzer.assert_not_called()
         persist.assert_not_called()
 
-    def test_force_and_unsupported_context_keep_full_with_opt_in(self) -> None:
+    def test_force_llm_keeps_full_with_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            analyzer, persist = self._run_main(
+                Path(directory),
+                incremental_enabled=True,
+                force_llm=True,
+                decision=ProcessingDecision(
+                    status=FULL_LLM_ANALYSIS,
+                    reasons=["force"],
+                    triggers=[],
+                    diff={"changes": ["transcript_changed"], "details": {}},
+                ),
+            )
+        analyzer.assert_called_once()
+        self.assertIsNone(analyzer.call_args.kwargs.get("incremental_context"))
+        self.assertEqual(persist.call_args.kwargs["decision_status"], FULL_LLM_ANALYSIS)
+
+    def test_commercial_and_incomplete_source_still_use_patch_when_baseline_is_safe(self) -> None:
         cases = (
-            ("force", True, {"changes": ["transcript_changed"], "details": {}}, {}),
-            ("commercial", False, {"changes": ["commercial_refs_changed"], "details": {}}, {}),
-            ("failed source", False, {"changes": ["transcript_changed"], "details": {}}, {"activities": "failed"}),
+            ("commercial", {"changes": ["commercial_refs_changed"], "details": {}}, {}),
+            ("failed source", {"changes": ["transcript_changed"], "details": {}}, {"activities": "failed"}),
         )
-        for label, force_llm, diff, source_status in cases:
+        for label, diff, source_status in cases:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
                 analyzer, persist = self._run_main(
                     Path(directory),
                     incremental_enabled=True,
-                    force_llm=force_llm,
                     source_status=source_status,
                     decision=ProcessingDecision(
                         status=FULL_LLM_ANALYSIS,
@@ -307,23 +322,11 @@ class DealChangeCliTests(unittest.TestCase):
                         diff=diff,
                     ),
                 )
-            analyzer.assert_called_once()
-            self.assertIsNone(analyzer.call_args.kwargs.get("incremental_context"))
-            self.assertEqual(persist.call_args.kwargs["decision_status"], FULL_LLM_ANALYSIS)
+            self.assertIsNotNone(analyzer.call_args.kwargs.get("incremental_context"))
+            self.assertEqual(persist.call_args.kwargs["decision_status"], INCREMENTAL_LLM_ANALYSIS)
 
-    def test_size_routing_keeps_incremental_when_unique_context_is_much_smaller(self) -> None:
-        routing = {
-            "full_variable_bytes": 10000,
-            "incremental_variable_bytes": 1000,
-            "routing_size_ratio": 0.1,
-            "routing_size_threshold": 0.90,
-            "chosen_analysis_mode": "incremental",
-        }
-        with tempfile.TemporaryDirectory() as directory, patch.object(
-            analyze_deal_if_changed,
-            "adaptive_variable_size_routing",
-            return_value=routing,
-        ):
+    def test_size_no_longer_falls_back_to_full(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
             analyzer, persist = self._run_main(
                 Path(directory),
                 incremental_enabled=True,
@@ -337,52 +340,12 @@ class DealChangeCliTests(unittest.TestCase):
         self.assertIsNotNone(analyzer.call_args.kwargs["incremental_context"])
         self.assertEqual(persist.call_args.kwargs["decision_status"], INCREMENTAL_LLM_ANALYSIS)
         reason = persist.call_args.kwargs["decision_reason"]
-        self.assertEqual(reason["chosen_analysis_mode"], "incremental")
-        self.assertEqual(reason["full_variable_bytes"], 10000)
-        self.assertEqual(reason["incremental_variable_bytes"], 1000)
-        self.assertEqual(reason["routing_size_ratio"], 0.1)
-        self.assertEqual(reason["routing_size_threshold"], 0.90)
+        self.assertNotIn("routing_size_ratio", reason)
+        self.assertNotIn("chosen_analysis_mode", reason)
+        self.assertNotEqual(reason.get("fallback_reason"), "incremental_variable_size_not_advantageous")
 
-    def test_size_routing_falls_back_to_full_when_incremental_is_not_smaller(self) -> None:
-        routing = {
-            "full_variable_bytes": 1000,
-            "incremental_variable_bytes": 950,
-            "routing_size_ratio": 0.95,
-            "routing_size_threshold": 0.90,
-            "chosen_analysis_mode": "full",
-        }
-        with tempfile.TemporaryDirectory() as directory, patch.object(
-            analyze_deal_if_changed,
-            "adaptive_variable_size_routing",
-            return_value=routing,
-        ):
-            analyzer, persist = self._run_main(
-                Path(directory),
-                incremental_enabled=True,
-                decision=ProcessingDecision(
-                    status=FULL_LLM_ANALYSIS,
-                    reasons=["new evidence"],
-                    triggers=[],
-                    diff={"changes": ["transcript_changed"], "details": {}},
-                ),
-            )
-        analyzer.assert_called_once()
-        self.assertIsNone(analyzer.call_args.kwargs.get("incremental_context"))
-        self.assertEqual(persist.call_args.kwargs["decision_status"], FULL_LLM_ANALYSIS)
-        reason = persist.call_args.kwargs["decision_reason"]
-        self.assertTrue(reason["fallback"])
-        self.assertEqual(reason["fallback_reason"], "incremental_variable_size_not_advantageous")
-        self.assertEqual(reason["chosen_analysis_mode"], "full")
-        self.assertEqual(reason["full_variable_bytes"], 1000)
-        self.assertEqual(reason["incremental_variable_bytes"], 950)
-        self.assertEqual(reason["routing_size_ratio"], 0.95)
-        self.assertEqual(reason["routing_size_threshold"], 0.90)
-
-    def test_first_full_does_not_call_size_routing(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, patch.object(
-            analyze_deal_if_changed,
-            "adaptive_variable_size_routing",
-        ) as size_routing:
+    def test_first_full_does_not_use_incremental(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
             analyzer, persist = self._run_main(
                 Path(directory),
                 incremental_enabled=True,
@@ -393,16 +356,12 @@ class DealChangeCliTests(unittest.TestCase):
                     diff={"changes": [], "details": {}},
                 ),
             )
-        size_routing.assert_not_called()
         analyzer.assert_called_once()
         self.assertIsNone(analyzer.call_args.kwargs.get("incremental_context"))
         self.assertEqual(persist.call_args.kwargs["decision_status"], FIRST_FULL_ANALYSIS)
 
-    def test_unsafe_baseline_keeps_full_without_size_routing(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, patch.object(
-            analyze_deal_if_changed,
-            "adaptive_variable_size_routing",
-        ) as size_routing:
+    def test_unsafe_baseline_keeps_full(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
             analyzer, persist = self._run_main(
                 Path(directory),
                 incremental_enabled=True,
@@ -414,7 +373,6 @@ class DealChangeCliTests(unittest.TestCase):
                     diff={"changes": ["transcript_changed"], "details": {}},
                 ),
             )
-        size_routing.assert_not_called()
         analyzer.assert_called_once()
         self.assertIsNone(analyzer.call_args.kwargs.get("incremental_context"))
         self.assertEqual(persist.call_args.kwargs["decision_status"], FULL_LLM_ANALYSIS)
@@ -423,7 +381,44 @@ class DealChangeCliTests(unittest.TestCase):
             "unsafe_trusted_baseline",
         )
 
-    def test_mini_and_skip_do_not_call_size_routing(self) -> None:
+    def test_invalid_patch_error_file_marks_fallback_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            calls = 0
+            error_path = analyze_deal_if_changed.analysis_paths(root / "deal_7", "7")["error"]
+
+            def fail_with_patch_error(*_args, **_kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    error_path.parent.mkdir(parents=True, exist_ok=True)
+                    error_path.write_text(
+                        json.dumps({"error_type": "incremental_patch_invalid"}, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    raise RuntimeError("synthetic patch rejection")
+
+            analyzer, persist = self._run_main(
+                root,
+                incremental_enabled=True,
+                analyzer_error=fail_with_patch_error,
+                decision=ProcessingDecision(
+                    status=FULL_LLM_ANALYSIS,
+                    reasons=["new evidence"],
+                    triggers=[],
+                    diff={"changes": ["transcript_changed"], "details": {}},
+                ),
+            )
+        self.assertEqual(analyzer.call_count, 2)
+        self.assertIsNotNone(analyzer.call_args_list[0].kwargs["incremental_context"])
+        self.assertIsNone(analyzer.call_args_list[1].kwargs.get("incremental_context"))
+        reason = persist.call_args.kwargs["decision_reason"]
+        self.assertTrue(reason["fallback"])
+        self.assertEqual(reason["fallback_reason"], "incremental_patch_invalid")
+        self.assertEqual(reason["analysis_output_kind"], "incremental_patch_fallback_full")
+
+    def test_mini_and_skip_do_not_call_analyzer(self) -> None:
         cases = (
             ProcessingDecision(
                 status=MINI_RECOMMENDATION_NO_LLM,
@@ -459,16 +454,11 @@ class DealChangeCliTests(unittest.TestCase):
                     ]
                 started = [item.start() for item in extra_patches]
                 try:
-                    with patch.object(
-                        analyze_deal_if_changed,
-                        "adaptive_variable_size_routing",
-                    ) as size_routing:
-                        analyzer, _persist = self._run_main(
-                            Path(directory),
-                            incremental_enabled=True,
-                            decision=decision,
-                        )
-                    size_routing.assert_not_called()
+                    analyzer, _persist = self._run_main(
+                        Path(directory),
+                        incremental_enabled=True,
+                        decision=decision,
+                    )
                     analyzer.assert_not_called()
                 finally:
                     for item in reversed(extra_patches):

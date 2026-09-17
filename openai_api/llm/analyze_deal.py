@@ -28,6 +28,12 @@ from openai_api.audio.transcript_context import AGGREGATE_STEM
 from openai_api.change_detection.stage_policy import build_deal_stage_policy
 from openai_api.config import ANALYSIS_MODEL, COMMUNICATION_QUALITY_AUDIT_ENABLED, logger
 from openai_api.llm.full_analysis_repair import build_full_repair_builder
+from openai_api.llm.incremental_analysis_patch import (
+    IncrementalPatchError,
+    OUTPUT_KIND_FULL,
+    apply_incremental_analysis_patch,
+    patchable_top_level_blocks,
+)
 from openai_api.llm.deal_call_projection import project_transcript_for_deal_prompt
 from openai_api.llm.deal_current_situation import (
     CURRENT_SITUATION_CONTEXT_MARKER,
@@ -38,7 +44,13 @@ from openai_api.llm.deal_evidence import (
     inbound_evidence_ids_present_in_prompt,
     transcript_evidence_ids_for_input,
 )
-from openai_api.llm.llm_client import ValidatedAnalysisFailure, call_analysis_json, call_validated_analysis_json
+from openai_api.llm.llm_client import (
+    ModelJsonParseError,
+    ValidatedAnalysisFailure,
+    call_analysis_json,
+    call_validated_analysis_json,
+    prompt_prefix_before,
+)
 from openai_api.llm.prompt_budget import attach_response_metadata, build_prompt_budget, write_prompt_budget
 from openai_api.llm.validation import AnalysisValidationError, normalize_analysis_for_validation, validate_deal_analysis
 from openai_api.logging_utils import log_model_file_payload, log_model_text_payload
@@ -54,11 +66,12 @@ from storage.rop_db import (
 DEFAULT_KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
 DEAL_ID_SECTION_MARKER = "## ID СДЕЛКИ"
 DEAL_PROMPT_CACHE_KEY = "neuro-rop:full-deal:v3"
-INCREMENTAL_DEAL_PROMPT_VERSION = "neuro-rop:incremental-deal:v2"
+INCREMENTAL_DEAL_PROMPT_VERSION = "neuro-rop:incremental-deal:v3"
 COMPATIBLE_DEAL_PROMPT_VERSIONS = frozenset(
     {
         DEAL_PROMPT_CACHE_KEY,
         "neuro-rop:incremental-deal:v1",
+        "neuro-rop:incremental-deal:v2",
         INCREMENTAL_DEAL_PROMPT_VERSION,
     }
 )
@@ -314,9 +327,11 @@ def build_prompt(
     # Empty on purpose: this slot sits in the cached prefix before ## ID СДЕЛКИ.
     incremental_rules = ""
     if incremental_context is not None:
-        incremental_prefix = """
+        allowed_blocks = ", ".join(sorted(patchable_top_level_blocks()))
+        incremental_prefix = f"""
 <incremental_analysis_rules>
-- PREVIOUS_TRUSTED_COMPLETE_ANALYSIS — предыдущее проверенное понимание, а не неизменная истина.
+- Этот вызов ПЕРЕОПРЕДЕЛЯЕТ JSON-структуру FULL выше. Верни только PATCH, не полный analysis JSON, не markdown и не пояснения.
+- PREVIOUS_TRUSTED_COMPLETE_ANALYSIS — текущая база. Оцени CRM_SEMANTIC_DELTA и NEW_OR_REVISED_CLIENT_EVIDENCE относительно неё.
 - Новые данные могут сохранить, пересмотреть или опровергнуть прежние выводы.
 - Используй только CRM_SEMANTIC_DELTA и NEW_OR_REVISED_CLIENT_EVIDENCE как новые evidence.
 - Новые доказательные ссылки call/email/message/transcript бери только из AVAILABLE_CLIENT_EVIDENCE_IDS. ID звонка или голосового Max без транскрипта можно оставить как пробел/попытку, но не как NEW_OR_REVISED_CLIENT_EVIDENCE и не для повышения confirmed. Не выдумывай ID. Исходящие текстовые активности не являются evidence разговора.
@@ -324,7 +339,13 @@ def build_prompt(
 - Не удаляй нерешённые обязательства, риски и противоречия из управленческих блоков, пока новые evidence явно не подтвердят их закрытие; новое событие может изменить приоритет, но не отменяет их молча.
 - Повышай basis_status или BANT timing до confirmed только если в этом же поле есть ID из NEW_OR_REVISED_CLIENT_EVIDENCE.
 - Понижай уже confirmed только если новое клиентское evidence явно опровергает срок или основание; не меняй confirmed по старому списку.
-- Верни полный текущий analysis JSON той же схемы, что FULL, не patch и не список изменений.
+- Не переписывай неизменившиеся блоки и не объясняй, почему они остались прежними.
+- Если top-level блок изменился по смыслу — верни его ЦЕЛИКОМ в updates. Не патчь отдельные вложенные поля.
+- Если блок не изменился — не включай его в updates.
+- Запрещено менять deal_id и любые поля вне PATCH-схемы. Новые ключи вне разрешённых блоков запрещены.
+- Разрешённые ключи updates: {allowed_blocks}.
+- Если выводы не изменились, верни ровно {{"no_change": true, "updates": {{}}}}.
+- Иначе верни {{"no_change": false, "updates": {{"<block>": <полный актуальный блок>}}}}.
 </incremental_analysis_rules>
 """
         evidence_sections = (
@@ -1703,6 +1724,31 @@ def save_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _write_analysis_error(
+    path: Path,
+    *,
+    generated_at: str,
+    deal_id: str,
+    error: BaseException,
+    metadata: dict[str, Any],
+    analysis: dict[str, Any] | None = None,
+    error_type: str | None = None,
+) -> None:
+    payload = {
+        "generated_at": generated_at,
+        "deal_id": str(deal_id),
+        "error": str(error),
+        "model_metadata": {
+            key: value for key, value in metadata.items() if key != "raw_output_text"
+        },
+    }
+    if error_type:
+        payload["error_type"] = error_type
+    if analysis is not None:
+        payload["analysis"] = analysis
+    save_json(path, payload)
+
+
 def load_context_diagnostics_for_analysis(
     *,
     entity_type: str,
@@ -1828,45 +1874,81 @@ def main() -> None:
         transcript_text=transcript_text,
     )
     emit_progress("deal", str(args.deal_id), "llm_analysis", detail="Анализирует OpenAI")
+    metadata: dict[str, Any] = {}
+    retry_callback = retry_progress_callback(
+        "deal", str(args.deal_id), "llm_analysis", detail="Запрос OpenAI"
+    )
     try:
-        analysis, metadata = call_validated_analysis_json(
-            prompt,
-            validator=validate_deal_analysis,
-            normalizer=normalize_analysis_for_validation,
-            validation_error_types=(AnalysisValidationError,),
-            model=args.model,
-            targeted_repair_builder=build_full_repair_builder("deal", prompt),
-            retry_callback=retry_progress_callback(
-                "deal", str(args.deal_id), "llm_analysis", detail="Запрос OpenAI"
-            ),
-            semantic_callback=retry_progress_callback(
-                "deal", str(args.deal_id), "validation", detail="Проверяет ответ модели"
-            ),
-            analysis_caller=call_analysis_json,
-            call_type="incremental_deal_analysis" if incremental_context else "full_deal_analysis",
-            prompt_cache_key=cache_key,
-            prompt_cache_markers=cache_markers,
-            trace_entity_type="deal",
-            trace_entity_id=str(args.deal_id),
-        )
+        if incremental_context is not None:
+            cache_prefixes = sorted(
+                {prompt_prefix_before(prompt, marker) for marker in cache_markers},
+                key=len,
+            )
+            patch, metadata = call_analysis_json(
+                prompt,
+                model=args.model,
+                retry_callback=retry_callback,
+                call_type="incremental_deal_analysis",
+                prompt_cache_key=cache_key,
+                cache_prefixes=cache_prefixes or None,
+                trace_entity_type="deal",
+                trace_entity_id=str(args.deal_id),
+            )
+            analysis, output_kind = apply_incremental_analysis_patch(
+                incremental_context["PREVIOUS_TRUSTED_COMPLETE_ANALYSIS"],
+                patch,
+            )
+            metadata = dict(metadata)
+            metadata["analysis_output_kind"] = output_kind
+        else:
+            analysis, metadata = call_validated_analysis_json(
+                prompt,
+                validator=validate_deal_analysis,
+                normalizer=normalize_analysis_for_validation,
+                validation_error_types=(AnalysisValidationError,),
+                model=args.model,
+                targeted_repair_builder=build_full_repair_builder("deal", prompt),
+                retry_callback=retry_callback,
+                semantic_callback=retry_progress_callback(
+                    "deal", str(args.deal_id), "validation", detail="Проверяет ответ модели"
+                ),
+                analysis_caller=call_analysis_json,
+                call_type="full_deal_analysis",
+                prompt_cache_key=cache_key,
+                prompt_cache_markers=cache_markers,
+                trace_entity_type="deal",
+                trace_entity_id=str(args.deal_id),
+            )
+            metadata = dict(metadata)
+            metadata["analysis_output_kind"] = OUTPUT_KIND_FULL
     except ValidatedAnalysisFailure as error:
         write_prompt_budget(prompt_budget_path, attach_response_metadata(prompt_budget, error.metadata))
         raw_path.write_text(error.raw_output_text, encoding="utf-8")
-        error_payload = {
-            "generated_at": generated_at,
-            "deal_id": str(args.deal_id),
-            "error": str(error),
-            "model_metadata": {
-                key: value for key, value in error.metadata.items() if key != "raw_output_text"
-            },
-        }
-        if error.analysis is not None:
-            error_payload["analysis"] = error.analysis
-        save_json(
+        _write_analysis_error(
             error_path,
-            error_payload,
+            generated_at=generated_at,
+            deal_id=str(args.deal_id),
+            error=error,
+            metadata=error.metadata,
+            analysis=error.analysis,
         )
         print(f"Model analysis failed after correction attempt. Raw output saved: {raw_path}")
+        print(f"Error details saved: {error_path}")
+        raise
+    except (IncrementalPatchError, ModelJsonParseError) as error:
+        error_metadata = dict(getattr(error, "metadata", None) or metadata)
+        raw_output = str(getattr(error, "raw_output_text", "") or error_metadata.get("raw_output_text") or "")
+        write_prompt_budget(prompt_budget_path, attach_response_metadata(prompt_budget, error_metadata))
+        raw_path.write_text(raw_output, encoding="utf-8")
+        _write_analysis_error(
+            error_path,
+            generated_at=generated_at,
+            deal_id=str(args.deal_id),
+            error=error,
+            metadata=error_metadata,
+            error_type="incremental_patch_invalid",
+        )
+        print(f"Incremental PATCH failed. Raw output saved: {raw_path}")
         print(f"Error details saved: {error_path}")
         raise
 
@@ -1887,6 +1969,7 @@ def main() -> None:
         "crm_stage_policy": stage_policy,
         "PRIOR_NEURO_ROP_RECOMMENDATION": prior_neuro_rop_recommendation,
         "analysis_mode": "incremental" if incremental_context else "full",
+        "analysis_output_kind": metadata.get("analysis_output_kind"),
         "evidence_ids_included": sorted({
             str(item.get("evidence_id"))
             for item in (incremental_context or {}).get("NEW_OR_REVISED_CLIENT_EVIDENCE", [])

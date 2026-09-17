@@ -47,7 +47,10 @@ class IncrementalDealAnalysisTests(unittest.TestCase):
             "synthetic-rule",
         ):
             self.assertIn(marker, prompt)
-        self.assertIn("полный текущий analysis JSON", prompt)
+        self.assertIn("не полный analysis JSON", prompt)
+        self.assertIn("только PATCH", prompt)
+        self.assertIn("не объясняй, почему они остались прежними", prompt)
+        self.assertNotIn("полный текущий analysis JSON", prompt)
         self.assertIn("не отменяет их молча", prompt)
         self.assertIn("NEW_OR_REVISED_CLIENT_EVIDENCE", prompt)
         self.assertIn("Повышай basis_status или BANT timing до confirmed", prompt)
@@ -121,9 +124,10 @@ class IncrementalDealAnalysisTests(unittest.TestCase):
         self.assertNotIn("<incremental_analysis_rules>", full[:marker_at])
 
     def test_incremental_prompt_version_stays_separate_from_openai_cache_key(self) -> None:
-        self.assertEqual(INCREMENTAL_DEAL_PROMPT_VERSION, "neuro-rop:incremental-deal:v2")
+        self.assertEqual(INCREMENTAL_DEAL_PROMPT_VERSION, "neuro-rop:incremental-deal:v3")
         self.assertNotEqual(INCREMENTAL_DEAL_PROMPT_VERSION, DEAL_PROMPT_CACHE_KEY)
         self.assertIn("neuro-rop:incremental-deal:v1", COMPATIBLE_DEAL_PROMPT_VERSIONS)
+        self.assertIn("neuro-rop:incremental-deal:v2", COMPATIBLE_DEAL_PROMPT_VERSIONS)
         self.assertIn(INCREMENTAL_DEAL_PROMPT_VERSION, COMPATIBLE_DEAL_PROMPT_VERSIONS)
         self.assertIn(DEAL_PROMPT_CACHE_KEY, COMPATIBLE_DEAL_PROMPT_VERSIONS)
 
