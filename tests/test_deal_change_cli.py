@@ -304,25 +304,66 @@ class DealChangeCliTests(unittest.TestCase):
         self.assertIsNone(analyzer.call_args.kwargs.get("incremental_context"))
         self.assertEqual(persist.call_args.kwargs["decision_status"], FULL_LLM_ANALYSIS)
 
-    def test_commercial_refs_changed_keeps_full_when_baseline_is_safe(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            analyzer, persist = self._run_main(
-                Path(directory),
-                incremental_enabled=True,
-                decision=ProcessingDecision(
-                    status=FULL_LLM_ANALYSIS,
-                    reasons=["commercial"],
-                    triggers=[],
-                    diff={"changes": ["commercial_refs_changed"], "details": {}},
-                ),
-            )
-        analyzer.assert_called_once()
-        self.assertIsNone(analyzer.call_args.kwargs.get("incremental_context"))
-        self.assertEqual(persist.call_args.kwargs["decision_status"], FULL_LLM_ANALYSIS)
-        self.assertEqual(
-            persist.call_args.kwargs["decision_reason"]["fallback_reason"],
-            "commercial_delta_requires_full",
+    def test_commercial_refs_changed_with_hard_event_uses_incremental_when_baseline_is_safe(self) -> None:
+        cases = (
+            ["new_client_reply", "commercial_refs_changed"],
+            ["transcript_changed", "commercial_refs_changed"],
         )
+        for changes in cases:
+            with self.subTest(changes=changes), tempfile.TemporaryDirectory() as directory:
+                analyzer, persist = self._run_main(
+                    Path(directory),
+                    incremental_enabled=True,
+                    decision=ProcessingDecision(
+                        status=FULL_LLM_ANALYSIS,
+                        reasons=["hard event with commercial change"],
+                        triggers=[],
+                        diff={"changes": changes, "details": {}},
+                    ),
+                )
+                self.assertIsNotNone(analyzer.call_args.kwargs.get("incremental_context"))
+                self.assertEqual(persist.call_args.kwargs["decision_status"], INCREMENTAL_LLM_ANALYSIS)
+                self.assertNotEqual(
+                    persist.call_args.kwargs["decision_reason"].get("fallback_reason"),
+                    "commercial_delta_requires_full",
+                )
+
+    def test_commercial_refs_changed_alone_stays_mini_without_analyzer(self) -> None:
+        decision = ProcessingDecision(
+            status=MINI_RECOMMENDATION_NO_LLM,
+            reasons=["commercial materials"],
+            triggers=[{"trigger_type": "commercial_refs_changed_without_llm"}],
+            diff={"changes": ["commercial_refs_changed"], "details": {}},
+        )
+        extra_patches = [
+            patch.object(
+                analyze_deal_if_changed,
+                "filter_today_mini_triggers",
+                return_value=decision.triggers,
+            ),
+            patch.object(
+                analyze_deal_if_changed,
+                "render_mini_recommendation",
+                return_value="mini",
+            ),
+            patch.object(analyze_deal_if_changed, "save_mini_recommendation_markdown"),
+            patch.object(analyze_deal_if_changed, "save_mini_recommendation"),
+            patch.object(analyze_deal_if_changed, "persist_skip", return_value=3),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            started = [item.start() for item in extra_patches]
+            try:
+                analyzer, persist = self._run_main(
+                    Path(directory),
+                    incremental_enabled=True,
+                    decision=decision,
+                )
+                analyzer.assert_not_called()
+                persist.assert_not_called()
+            finally:
+                for item in reversed(extra_patches):
+                    item.stop()
+                del started
 
     def test_incomplete_source_still_uses_patch_when_baseline_is_safe(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

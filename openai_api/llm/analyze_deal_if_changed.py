@@ -626,8 +626,6 @@ def main() -> None:
         incremental_blocker = None
         if baseline is None:
             incremental_blocker = "unsafe_trusted_baseline"
-        elif "commercial_refs_changed" in set(decision.diff.get("changes") or []):
-            incremental_blocker = "commercial_delta_requires_full"
         elif args.force_llm:
             incremental_blocker = "forced_full"
 
