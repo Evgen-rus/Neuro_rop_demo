@@ -1,5 +1,5 @@
 import type { DailyTaskResult } from './api'
-import { formatMoscowDateTime, moscowDateParts, parseMoscowDateTime } from './dateTime.ts'
+import { formatMoscowDateTime, moscowDateParts, parseMoscowDateTime, businessNow } from './dateTime.ts'
 
 type Reschedule = DailyTaskResult['reschedules'][number]
 type DateTimeValue = string | number | Date
@@ -23,12 +23,12 @@ function moscowDayDelta(left: Date, right: DateTimeValue): number {
   return a.year - b.year || a.month - b.month || a.day - b.day
 }
 
-export function rescheduleFromDueToday(fromDeadline?: string | null, now: DateTimeValue = new Date()): boolean {
+export function rescheduleFromDueToday(fromDeadline?: string | null, now: DateTimeValue = businessNow()): boolean {
   const parsed = parsedRescheduleDate(fromDeadline)
   return parsed !== null && moscowDayDelta(parsed, now) === 0
 }
 
-export function rescheduleFromDueOnOrBeforeToday(fromDeadline?: string | null, now: DateTimeValue = new Date()): boolean {
+export function rescheduleFromDueOnOrBeforeToday(fromDeadline?: string | null, now: DateTimeValue = businessNow()): boolean {
   const parsed = parsedRescheduleDate(fromDeadline)
   return parsed !== null && moscowDayDelta(parsed, now) <= 0
 }

@@ -3,8 +3,9 @@
 The button starts the existing change-aware analyze job with force_llm=False.
 That job first reads Bitrix for this deal, then the decision engine chooses
 FULL / MINI / skip. Last contact is taken from the refreshed workspace, not from
-a stale local snapshot. A small companion LLM runs only after that, and only if
-the last contact plus current report are not already cached.
+a stale local snapshot. In DEMO_MODE the Bitrix analyze step is skipped and the
+saved local workspace is used. A small companion LLM runs only after that, and
+only if the last contact plus current report are not already cached.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from api.deal_manager_situation import DEFAULT_DB_PATH, _safe_model_meta, _stora
 from api.jobs import AnalyzeOptions, busy_analyze_entity_ids, list_jobs, start_analyze_job, wait_for_job
 from bitrix.workspace import deal_workspace_dir
 from openai_api.llm.deal_manager_companion import generate_deal_manager_companion
+from app_clock import app_now, is_demo_mode
 from setup import MSK_TZ
 
 
@@ -117,7 +119,7 @@ def _event_content(deal_id: str, event: dict[str, Any]) -> tuple[bool, str | Non
 
 
 def find_last_contact(deal_id: str, *, now: datetime | None = None) -> dict[str, Any] | None:
-    current = now or datetime.now(MSK_TZ)
+    current = now or app_now()
     if current.tzinfo is None:
         current = current.replace(tzinfo=MSK_TZ)
     current = current.astimezone(MSK_TZ)
@@ -264,6 +266,8 @@ def _run(job_id: str, db_path: str | Path, regenerate: bool, manager_note: str) 
     try:
         if rewrite_only:
             _touch(job, "llm", "Переписываем сообщение по уточнению менеджера", 28)
+        elif is_demo_mode():
+            _touch(job, "contact", "Используем сохранённый локальный контекст", 48)
         else:
             _touch(job, "bitrix", "Обновляем данные из Bitrix", 12)
             analyze_job, started = _run_analyze(job.deal_id)

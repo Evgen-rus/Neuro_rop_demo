@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app_clock import app_now
 from setup import MSK_TZ
 
 
@@ -110,7 +111,7 @@ def latest_activity_dt(snapshot: dict[str, Any]) -> datetime | None:
 
 
 def overdue_open_tasks(snapshot: dict[str, Any], now: datetime | None = None) -> list[dict[str, Any]]:
-    now = now or datetime.now(MSK_TZ)
+    now = now or app_now()
     result = []
     for item in snapshot.get("activities", []) or []:
         if item.get("kind") != "task":
@@ -178,7 +179,7 @@ def no_activity_trigger(snapshot: dict[str, Any], days_threshold: int = 2) -> di
     latest = latest_activity_dt(snapshot)
     if not latest:
         return {"trigger_type": "no_activity_found"}
-    now = datetime.now(latest.tzinfo or MSK_TZ)
+    now = app_now().astimezone(latest.tzinfo or MSK_TZ)
     days = (now - latest).total_seconds() / 86400
     if days >= days_threshold:
         return {

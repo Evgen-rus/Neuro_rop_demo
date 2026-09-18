@@ -16,6 +16,7 @@ from api.candidates import DEAL_OWNER_TYPE_ID, LEAD_OWNER_TYPE_ID, parse_bitrix_
 from api.deal_task_day import stamp
 from bitrix.customer_history import activity_type, messenger_mirror_from_comment
 from bitrix.usage_trace import bitrix_trace_context
+from app_clock import app_now
 from setup import MSK_TZ
 
 
@@ -233,7 +234,7 @@ def normalize_activity_payload(
     provider_id = str(activity.get("PROVIDER_ID") or "").upper()
     kind = "task" if provider_id.startswith("CRM_TASKS_") else activity_type(activity)
     completed = str(activity.get("COMPLETED") or "").upper() in {"Y", "1", "TRUE"}
-    observation = (observed_at or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    observation = (observed_at or app_now()).astimezone(MSK_TZ)
     occurred_at, occurred_at_source = _activity_occurred_at(
         activity,
         kind=kind,
@@ -353,7 +354,7 @@ def fetch_activity_facts(client: Any, manager_ids: list[str], start: datetime, e
     errors: dict[str, Any] = {}
     _errors_add(errors, "crm.activity.list", response)
     facts: list[dict[str, Any]] = []
-    observed_at = min(end.astimezone(MSK_TZ), datetime.now(MSK_TZ))
+    observed_at = min(end.astimezone(MSK_TZ), app_now())
     for activity in _result_items(response):
         payload = normalize_activity_payload(activity, observed_at=observed_at)
         entity_type = str(payload.get("owner_type") or "")
@@ -627,7 +628,7 @@ def collect_presence_snapshots(client: Any, manager_ids: Iterable[str]) -> dict[
         )
     errors: dict[str, Any] = {}
     _errors_add(errors, "user.get", response)
-    observed_at = datetime.now(MSK_TZ).isoformat(timespec="seconds")
+    observed_at = app_now().isoformat(timespec="seconds")
     facts: list[dict[str, Any]] = []
     for item in _result_items(response):
         manager_id = _string(item.get("ID"))

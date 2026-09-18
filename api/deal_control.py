@@ -43,6 +43,7 @@ from openai_api.audio.short_call import load_recording_durations
 from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
 from openai_api.llm.deal_daily_quality import is_daily_quality_evidence, quality_event_signature
 from progress_events import compact_decision_status
+from app_clock import app_now, is_demo_mode
 from setup import MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -516,6 +517,14 @@ def load_deal_comments(
     deal_id: str,
     client: Any | None = None,
 ) -> dict[str, Any]:
+    if is_demo_mode() and client is None:
+        return {
+            "deal_id": str(deal_id),
+            "available": False,
+            "comments": [],
+            "files": [],
+            "archive_url": None,
+        }
     crm = client or make_client()
     payload = {
         "order": {"CREATED": "DESC", "ID": "DESC"},
@@ -968,6 +977,13 @@ def refresh_deal_control(
     viewer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Synchronise the configured deal portfolio using only Bitrix read calls."""
+    if is_demo_mode() and client is None:
+        return build_deal_control_dashboard(
+            db_path=db_path,
+            now=now,
+            viewer=viewer,
+            sync_message="DEMO_MODE: показан локальный снимок, Bitrix не вызывается.",
+        )
     scope = get_deal_control_scope(db_path)
     if not scope["configured"]:
         return build_deal_control_dashboard(
@@ -977,7 +993,7 @@ def refresh_deal_control(
             sync_message="Сначала настройте локальную выборку сделок.",
         )
     crm = client or make_client()
-    current = now or datetime.now(MSK_TZ)
+    current = now or app_now()
     stage_names = load_pipeline_stage_names()
     initial, errors = _fetch_initial_deals(crm, scope["initial_deal_ids"])
     manager_ids = {str(value) for value in scope["manager_ids"]}
@@ -1494,7 +1510,7 @@ def build_deal_control_deal(
     """Rebuild the dashboard projection for one deal without scanning every report."""
     from api.deal_task_day import day_events
 
-    current = now or datetime.now(MSK_TZ)
+    current = now or app_now()
     deal = get_deal_control_deal(db_path, deal_id=str(deal_id), active_only=False)
     if deal is None:
         raise ValueError("Сделка не найдена в локальном контуре контроля")
@@ -1541,7 +1557,7 @@ def build_deal_control_dashboard(
 ) -> dict[str, Any]:
     from api.deal_task_day import day_events
 
-    current = now or datetime.now(MSK_TZ)
+    current = now or app_now()
     events_by_deal: dict[str, list[dict[str, Any]]] = {}
     for event in day_events(db_path, current):
         events_by_deal.setdefault(str(event.get("entity_id")), []).append(event)

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
-from setup import MSK_TZ
+from app_clock import business_date
 
 
 RESTORE_NO_CONTACT_PROCESSING = "restore_no_contact_processing"
@@ -27,7 +27,7 @@ LEAD_ACTION_PLAYBOOKS: dict[str, dict[str, str]] = {
 def _deadline(value: Any, *, today: date | None = None) -> str:
     if isinstance(value, str) and value.strip():
         return value
-    return (today or datetime.now(MSK_TZ).date()).isoformat()
+    return (today or business_date()).isoformat()
 
 
 def materialize_lead_playbook_action(

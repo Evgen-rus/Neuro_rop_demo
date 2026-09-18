@@ -15,6 +15,7 @@ from api.manager_trajectory import (
     project_manager_trajectory_for_display,
 )
 from setup import MSK_TZ
+from app_clock import app_now
 from storage.rop_db import (
     DEFAULT_DB_PATH,
     get_saved_deal_manager_quick_help,
@@ -54,7 +55,7 @@ def day_bounds(value: date) -> tuple[datetime, datetime]:
 
 
 def _now_moscow() -> datetime:
-    return datetime.now(MSK_TZ)
+    return app_now()
 
 
 def _effective_day_bounds(value: date) -> tuple[datetime, datetime]:
@@ -627,7 +628,7 @@ def build_day_projection(
             "status": state.get("last_status") or "unknown",
             "last_success_at": last_success,
             "last_attempt_at": state.get("last_attempt_at"),
-            "is_current_day": value == datetime.now(MSK_TZ).date(),
+            "is_current_day": value == app_now().date(),
         },
         "totals": {
             "events": sum(item["totals"]["events"] for item in projected_managers),

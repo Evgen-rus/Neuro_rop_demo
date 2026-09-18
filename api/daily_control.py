@@ -22,6 +22,7 @@ from openai_api.llm.deal_daily_quality import (
 )
 
 from setup import MSK_TZ, get_logger
+from app_clock import app_now, is_demo_mode
 from storage.rop_db import (
     DEFAULT_DB_PATH,
     create_daily_control_report,
@@ -349,7 +350,7 @@ def compute_source_watermark(
 
     Read-only: does not call Bitrix/LLM.
     """
-    current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    current = _aware(now or app_now()).astimezone(MSK_TZ)
     business_date = current.date().isoformat()
     parts: list[str] = [business_date]
     active_ids: set[str] = set()
@@ -416,7 +417,7 @@ def classify_deal_status(
 ) -> tuple[str, str]:
     """Server-side red/yellow/green/neutral from existing structured deal-control facts."""
     coaching = deal.get("coaching") if isinstance(deal.get("coaching"), dict) else {}
-    audit = quality if quality is not None else _daily_quality_block(deal, now or datetime.now(MSK_TZ))
+    audit = quality if quality is not None else _daily_quality_block(deal, now or app_now())
     bitrix_task = deal.get("primary_bitrix_task") if isinstance(deal.get("primary_bitrix_task"), dict) else {}
     scores = _audit_scores(audit)
     zero_count = sum(1 for score in scores.values() if score == 0)
@@ -862,7 +863,7 @@ def project_deal_review_card(deal: dict[str, Any], *, now: datetime | None = Non
     LLM or Bitrix.
     """
     coaching = deal.get("coaching") if isinstance(deal.get("coaching"), dict) else {}
-    quality = _daily_quality_block(deal, now or datetime.now(MSK_TZ))
+    quality = _daily_quality_block(deal, now or app_now())
     status, status_label = classify_deal_status(deal, quality=quality)
     communications = _sanitize_communications(deal.get("communications_today"))
     script = str(coaching.get("manager_coaching") or "").strip()
@@ -946,7 +947,7 @@ def build_daily_control_snapshot(
     carried_obligation_ids: set[str] | None = None,
     recorded_through: datetime | None = None,
 ) -> dict[str, Any]:
-    quality_now = cutoff_at or quality_time(dashboard.get("generated_at")) or datetime.now(MSK_TZ)
+    quality_now = cutoff_at or quality_time(dashboard.get("generated_at")) or app_now()
     deals = [project_deal_review_card(deal, now=quality_now) for deal in dashboard.get("deals") or [] if isinstance(deal, dict)]
     if cutoff_at is not None:
         sources = {str(deal.get("deal_id")): deal for deal in dashboard.get("deals") or [] if isinstance(deal, dict)}
@@ -1074,7 +1075,7 @@ def publish_daily_control_report(
     automatic_analysis_run_id: int | None = None,
     recorded_through: datetime | None = None,
 ) -> dict[str, Any]:
-    current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    current = _aware(now or app_now()).astimezone(MSK_TZ)
     started = started_at if isinstance(started_at, datetime) else datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
     started = _aware(started).astimezone(MSK_TZ)
     warnings: list[str] = []
@@ -1117,7 +1118,7 @@ def publish_daily_control_report(
         recorded_through = _aware(recorded_through).astimezone(MSK_TZ)
     elif refresh:
         # CRM collect for this snapshot may finish a minute after the frozen cutoff.
-        recorded_through = datetime.now(MSK_TZ)
+        recorded_through = app_now()
     carried_ids = None
     if creation_kind == "automatic_day_end":
         carried_ids = _planning_obligation_ids(db_path, _business_date(cutoff_dt))
@@ -1158,7 +1159,7 @@ def publish_planning_daily_control_report(
 
     Does not start a new analysis job. Uses the last automatic-batch status as a visible warning.
     """
-    current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    current = _aware(now or app_now()).astimezone(MSK_TZ)
     existing = [
         item
         for item in list_daily_control_reports(db_path)
@@ -1186,25 +1187,28 @@ def publish_planning_daily_control_report(
         started_at=current,
         cutoff_at=current,
         now=current,
-        recorded_through=_aware((clock or (lambda: datetime.now(MSK_TZ)))()).astimezone(MSK_TZ),
+        recorded_through=_aware((clock or (lambda: app_now()))()).astimezone(MSK_TZ),
         dashboard=dashboard,
     )
 
 
 def _refresh_final_sources(*, db_path: str | Path, now: datetime) -> dict[str, Any]:
     """Read CRM and task history after the evening analysis, without launching AI."""
-    from api.candidates import make_client
     from api.deal_control import build_deal_control_dashboard, refresh_deal_control
+
+    if is_demo_mode():
+        return build_deal_control_dashboard(db_path=db_path, now=now)
+    from api.candidates import make_client
     from api.manager_trajectory import collect_manager_trajectory
 
     payload = refresh_deal_control(db_path=db_path, now=now)
     errors = list(payload.get("sync_errors") or [])
     try:
-        facts = collect_manager_trajectory(make_client(), db_path=db_path, to_at=datetime.now(MSK_TZ))
+        facts = collect_manager_trajectory(make_client(), db_path=db_path, to_at=app_now())
         errors.extend(f"История CRM: {key}: {value}" for key, value in (facts.get("errors") or {}).items())
     except Exception as error:  # noqa: BLE001 - preserve a transparent partial report
         errors.append(f"История CRM недоступна: {error}")
-    return build_deal_control_dashboard(db_path=db_path, now=datetime.now(MSK_TZ), sync_errors=errors)
+    return build_deal_control_dashboard(db_path=db_path, now=app_now(), sync_errors=errors)
 
 
 def publish_day_end_daily_control_report(
@@ -1212,7 +1216,7 @@ def publish_day_end_daily_control_report(
     refresh_fn: Callable[..., dict[str, Any]] | None = None,
     clock: Callable[[], datetime] | None = None,
 ) -> dict[str, Any]:
-    current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    current = _aware(now or app_now()).astimezone(MSK_TZ)
     for item in list_daily_control_reports(db_path):
         if item.get("creation_kind") == "automatic_day_end" and item.get("business_date") == current.date().isoformat():
             return get_daily_control_report(db_path, int(item["id"]), include_snapshot=True) or {}
@@ -1222,7 +1226,7 @@ def publish_day_end_daily_control_report(
         dashboard = (refresh_fn or _refresh_final_sources)(db_path=db_path, now=current)
     except Exception as error:  # noqa: BLE001 - publish saved state with an explicit warning
         dashboard = build_deal_control_dashboard(db_path=db_path, now=current, sync_errors=[f"Вечернее обновление CRM не завершено: {error}"])
-    finished = _aware((clock or (lambda: datetime.now(MSK_TZ)))()).astimezone(MSK_TZ)
+    finished = _aware((clock or (lambda: app_now()))()).astimezone(MSK_TZ)
     if finished.date() != current.date():
         raise RuntimeError("Вечернее обновление пересекло полночь: нельзя выдать текущее состояние за вчерашний срез")
     latest_run = get_latest_automatic_analysis_run(db_path)
@@ -1241,8 +1245,8 @@ def _run_manual_generation(db_path: str | Path, started: datetime) -> None:
             db_path=db_path,
             creation_kind="manual",
             started_at=started,
-            cutoff_at=datetime.now(MSK_TZ),
-            now=datetime.now(MSK_TZ),
+            cutoff_at=app_now(),
+            now=app_now(),
             refresh=True,
         )
         _set_generation_state(
@@ -1274,7 +1278,7 @@ def start_manual_daily_control_report(
     current = generation_status()
     if current and current.get("status") in {"queued", "running"}:
         return current
-    started = datetime.now(MSK_TZ)
+    started = app_now()
     state = _set_generation_state(
         {
             "status": "running",
@@ -1369,7 +1373,7 @@ def _visible_history_reports(db_path: str | Path) -> list[dict[str, Any]]:
 def history_payload(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | None = None) -> dict[str, Any]:
     reports = _visible_history_reports(db_path)
     latest_id = int(reports[0]["id"]) if reports else None
-    current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    current = _aware(now or app_now()).astimezone(MSK_TZ)
     default_id = latest_id
     expected_final_date = current.date() - timedelta(days=1)
     while expected_final_date.weekday() > 4:

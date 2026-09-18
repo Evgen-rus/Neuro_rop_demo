@@ -24,6 +24,7 @@ from openai_api.change_detection.stage_policy import (
 )
 from openai_api.pricing import estimate_analysis_cost
 from setup import BASE_DIR, MSK_TZ
+from app_clock import app_now
 from storage.rop_db import (
     DEFAULT_DB_PATH,
     daily_paid_capacity_used,
@@ -90,7 +91,7 @@ def days_since(value: Any, *, now: datetime | None = None) -> int | None:
     dt = parse_bitrix_dt(value)
     if dt is None:
         return None
-    current = now or datetime.now(MSK_TZ)
+    current = now or app_now()
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=MSK_TZ)
     return max(0, int((current - dt.astimezone(MSK_TZ)).total_seconds() // 86400))
@@ -577,7 +578,7 @@ def apply_candidate_review_states(
         entity_type=entity_type,
         entity_ids=[str(item.get("entity_id") or "") for item in candidates],
     )
-    today = datetime.now(MSK_TZ).date().isoformat()
+    today = app_now().date().isoformat()
     result: list[dict[str, Any]] = []
     summary = {"reviewed_hidden": 0, "reviewed_visible": 0, "changed_after_review": 0, "crm_updated_after_review": 0}
 
@@ -972,7 +973,7 @@ def evaluate_call_method(
     *,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    current = now or datetime.now(MOSCOW_TZ)
+    current = now or app_now()
     calls = [item for item in activities if _is_call(item)]
     incoming = [item for item in calls if str(item.get("DIRECTION") or "") == "1"]
     outgoing = [item for item in calls if str(item.get("DIRECTION") or "") == "2"]
@@ -1415,7 +1416,7 @@ def apply_profile_review_states(
             entity_type=entity_type,
             entity_ids=[str(item.get("entity_id") or "") for item in rows],
         )
-        today = datetime.now(MOSCOW_TZ).date().isoformat()
+        today = app_now().date().isoformat()
         for item in rows:
             review = reviews.get(str(item.get("entity_id") or ""))
             if not review or review.get("state") == "active":

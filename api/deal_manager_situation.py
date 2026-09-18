@@ -21,7 +21,6 @@ import logging
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +34,7 @@ from openai_api.llm.deal_manager_situation import (
     unwrap_analysis,
 )
 from openai_api.llm.llm_client import ModelJsonParseError, ModelResponseIncompleteError
-from setup import MSK_TZ
+from app_clock import app_now
 from storage import rop_db as storage
 
 
@@ -70,7 +69,7 @@ def _storage_call_alias(names: tuple[str, ...], db_path: str | Path, **kwargs: A
 
 
 def _now() -> str:
-    return datetime.now(MSK_TZ).isoformat(timespec="seconds")
+    return app_now().isoformat(timespec="seconds")
 
 
 def _safe_model_meta(metadata: dict[str, Any] | None) -> dict[str, Any]:

@@ -18,6 +18,7 @@ from bitrix.deals.download_deals_call_audio import (
     load_existing_manifest, should_recheck_recording,
 )
 from bitrix.usage_trace import bitrix_trace_context
+from app_clock import app_now
 from setup import BASE_DIR, MSK_TZ
 from storage.rop_db import (
     crm_trajectory_signal_versions, get_crm_sync_state, list_crm_trajectory_signals_since,
@@ -291,7 +292,7 @@ def _save_trajectory_gate_ack(
 def probe_changes(client: Any, payloads: dict[str, dict], *, now: datetime | None = None,
                   probe_states: dict[str, dict] | None = None,
                   ignored_ids: dict[str, dict[str, set[str]]] | None = None) -> dict[str, set[str]]:
-    current = now or datetime.now(MSK_TZ)
+    current = now or app_now()
     probe_states = probe_states or {}
     ignored_ids = ignored_ids or {}
     def failed_before(response):
@@ -429,7 +430,7 @@ def probe_changes(client: Any, payloads: dict[str, dict], *, now: datetime | Non
 def plan_automatic_refresh(*, db_path: str | Path, deal_ids: list[str], client: Any = None,
                            now: datetime | None = None, sources_ok: bool = True,
                            workspace_root: Path = WORKSPACE_ROOT, audio_root: Path = AUDIO_ROOT) -> dict[str, dict]:
-    current = now or datetime.now(MSK_TZ)
+    current = now or app_now()
     versions = crm_trajectory_signal_versions(db_path)
     portfolio = {str(row["deal_id"]): row for row in list_deal_control_deals(db_path)}
     plans, probe_payloads = {}, {}
@@ -550,7 +551,7 @@ def acknowledge_refresh(db_path: str | Path, deal_id: str, plan: dict, *, worksp
     put_crm_sync_state(db_path, f"deal_ack:{deal_id}", {
         "events": events, "context_revision": stored["revision"],
         "transcript_signature": transcript_signature(deal_id, workspace_root),
-        "time_signal": time_signal(stored["payload"].get("context") or {}, datetime.now(MSK_TZ)),
+        "time_signal": time_signal(stored["payload"].get("context") or {}, app_now()),
     }, expected_revision=plan.get("ack_revision", 0))
     _save_trajectory_gate_ack(
         db_path,

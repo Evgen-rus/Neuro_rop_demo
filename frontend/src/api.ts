@@ -1865,6 +1865,17 @@ export function fetchCurrentUser() {
   return api<AuthMeResponse>('/api/auth/me')
 }
 
+export type RuntimeConfig = {
+  demo_mode: boolean
+  current_business_datetime: string
+  business_date: string
+  timezone: string
+}
+
+export function fetchRuntimeConfig() {
+  return api<RuntimeConfig>('/api/runtime', undefined, { suppressUnauthorizedEvent: true })
+}
+
 export function fetchLlmRuntimeStatus() {
   return api<LlmRuntimeStatus>('/api/admin/llm-runtime')
 }

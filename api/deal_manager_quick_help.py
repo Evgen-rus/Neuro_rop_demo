@@ -37,6 +37,7 @@ from api.deal_manager_situation import (
 )
 from openai_api.llm.deal_manager_quick_help import ASSISTANT_MODES, generate_deal_manager_quick_help
 from openai_api.llm.llm_client import ModelJsonParseError, ModelResponseIncompleteError
+from app_clock import app_now
 from setup import MSK_TZ
 
 logger = logging.getLogger(__name__)
@@ -447,7 +448,7 @@ def build_communication_pattern_context(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Build a bounded fact-only context without message bodies or transcripts."""
-    current = now or datetime.now(MSK_TZ)
+    current = now or app_now()
     if current.tzinfo is None:
         current = current.replace(tzinfo=MSK_TZ)
     current = current.astimezone(MSK_TZ)

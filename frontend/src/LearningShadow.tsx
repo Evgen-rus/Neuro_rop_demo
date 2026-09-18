@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { asRecord, asString, fetchLearningShadowRun, fetchLearningShadowRuns, startLearningShadowRun, type LearningShadowCase, type LearningShadowRun } from './api'
-import { formatMoscowDateTime } from './dateTime'
+import { formatMoscowDateTime, moscowDateInputValue } from './dateTime'
 
 function moscowToday(): string {
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  return moscowDateInputValue()
 }
 
 const STATUS: Record<LearningShadowCase['status'], string> = {

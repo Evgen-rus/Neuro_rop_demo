@@ -18,6 +18,7 @@ from openai_api.change_detection.decision_engine import (
     SKIPPED_NO_CHANGES,
 )
 from openai_api.config import read_bool_env
+from app_clock import app_now, is_demo_mode
 from setup import MSK_TZ, get_logger
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -66,7 +67,9 @@ def _running_under_unittest() -> bool:
 
 
 def daytime_cycle_enabled() -> bool:
-    """Production default is on; unit tests stay off unless the env flag is set."""
+    """Production default is on; demo and unit tests stay off unless the env flag is set."""
+    if is_demo_mode():
+        return False
     value = os.getenv("DAYTIME_CYCLE_ENABLED")
     if value is not None and value.strip():
         return read_bool_env("DAYTIME_CYCLE_ENABLED", True)
@@ -98,7 +101,7 @@ def slot_times_for_day() -> list[time]:
 
 
 def next_scheduled_at(now: datetime | None = None) -> datetime:
-    current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    current = _aware(now or app_now()).astimezone(MSK_TZ)
     slots = slot_times_for_day()
     # Friday after the final report must jump to Monday.
     for offset in range(0, 8):
@@ -538,6 +541,8 @@ def _launch_automatic_run_jobs(
 
 def resume_automatic_analysis_runs(db_path: str | Path = DEFAULT_DB_PATH) -> int:
     """Recover unfinished per-deal work after an API/container restart."""
+    if is_demo_mode():
+        return 0
     interrupt_running_automatic_analysis_runs(db_path)
     resumed = 0
     for run in list_recoverable_automatic_analysis_runs(db_path):
@@ -588,7 +593,7 @@ def run_daytime_cycle(
             }
         )
 
-    started = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    started = _aware(now or app_now()).astimezone(MSK_TZ)
     started_at = _iso(started)
     errors: list[str] = []
     sync_payload: dict[str, Any] | None = None

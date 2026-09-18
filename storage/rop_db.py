@@ -19,11 +19,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from setup import BASE_DIR, MSK_TZ
+from app_clock import app_now, business_date, resolve_db_path
+from setup import MSK_TZ
 from business_time import recommendation_due_at as _recommendation_due_at
 
 
-DEFAULT_DB_PATH = BASE_DIR / "reports" / "rop_assistant" / "rop_assistant.sqlite"
+DEFAULT_DB_PATH = resolve_db_path()
 DEFAULT_DEAL_CONTROL_PIPELINE_ID = "15"
 DEFAULT_DEAL_CONTROL_PIPELINE_IDS = ["15", "17", "47"]
 
@@ -142,7 +143,7 @@ class RopConnection(sqlite3.Connection):
 
 
 def utcish_now() -> str:
-    return datetime.now(MSK_TZ).isoformat(timespec="seconds")
+    return app_now().isoformat(timespec="seconds")
 
 
 def _moscow_business_date(value: date | datetime | str | None = None) -> str:
@@ -153,7 +154,7 @@ def _moscow_business_date(value: date | datetime | str | None = None) -> str:
         return current.astimezone(MSK_TZ).date().isoformat()
     if isinstance(value, date):
         return value.isoformat()
-    return datetime.now(MSK_TZ).date().isoformat()
+    return business_date().isoformat()
 
 
 def dumps_json(value: Any) -> str:
@@ -2978,7 +2979,7 @@ def create_automatic_analysis_run(
 ) -> dict[str, Any]:
     init_db(db_path)
     now = utcish_now()
-    date_value = str(business_date or datetime.now(MSK_TZ).date().isoformat())
+    date_value = str(business_date or _moscow_business_date())
     finished_at = None if status == "running" else now
     ids = [str(item) for item in entity_ids if str(item).strip()]
     with connect(db_path) as conn:

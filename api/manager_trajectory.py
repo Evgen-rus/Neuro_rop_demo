@@ -22,6 +22,7 @@ from bitrix.client import BitrixReadOnlyClient
 from bitrix.customer_history import messenger_mirror_from_comment
 from bitrix.usage_trace import bitrix_trace_context
 from setup import MSK_TZ
+from app_clock import app_now
 from storage.rop_db import (
     DEFAULT_DB_PATH,
     get_deal_control_scope,
@@ -125,7 +126,7 @@ def collect_manager_trajectory(
         raise ValueError("В deal-control scope не настроены manager_ids")
     disabled = set(list_disabled_manager_trajectory_ids(db_path))
     managers = [manager_id for manager_id in requested_managers if manager_id not in disabled]
-    end = _aware(to_at or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    end = _aware(to_at or app_now()).astimezone(MSK_TZ)
     state = get_manager_trajectory_collection_state(db_path, collection_key=COLLECTION_KEY)
     if from_at is not None:
         start = _aware(from_at).astimezone(MSK_TZ)

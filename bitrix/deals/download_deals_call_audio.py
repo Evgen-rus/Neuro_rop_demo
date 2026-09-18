@@ -457,6 +457,10 @@ def try_download_url(
     *,
     replace_existing: bool = False,
 ) -> dict[str, Any]:
+    from bitrix.client import assert_bitrix_http_allowed
+
+    assert_bitrix_http_allowed()
+
     def download_once() -> dict[str, Any]:
         response = requests.get(url, stream=True, timeout=60, allow_redirects=True)
         try:

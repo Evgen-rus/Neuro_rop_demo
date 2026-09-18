@@ -24,6 +24,7 @@ from openai_api.llm.deal_current_situation import (
     _raw_activities,
     is_substantive_client_content,
 )
+from app_clock import app_now
 from setup import MSK_TZ
 
 DAILY_QUALITY_MARKER = "## DAILY_QUALITY_CONTEXT"
@@ -95,7 +96,7 @@ def build_daily_quality_context(
     transcripts_dir: Path | None = None, deal_id: str = "",
     lead_id: str = "",
 ) -> dict[str, Any]:
-    current = quality_time(now or datetime.now(MSK_TZ))
+    current = quality_time(now or app_now())
     assert current is not None
     context: dict[str, Any] = {
         "business_date": current.date().isoformat(), "cutoff_at": current.isoformat(),

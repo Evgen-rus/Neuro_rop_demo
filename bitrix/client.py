@@ -37,6 +37,20 @@ class BitrixWriteBlockedError(Exception):
     """Diagnostic guard: a mutation method was about to be sent. Not a RuntimeError so safe_call cannot swallow it."""
 
 
+class BitrixDemoBlockedError(Exception):
+    """DEMO_MODE blocked a Bitrix HTTP request before the network. Not a RuntimeError so safe_call cannot swallow it."""
+
+
+def assert_bitrix_http_allowed() -> None:
+    """Fail-closed: in DEMO_MODE no Bitrix HTTP leaves the process."""
+    from app_clock import is_demo_mode
+
+    if is_demo_mode():
+        raise BitrixDemoBlockedError(
+            "DEMO_MODE блокирует любые внешние HTTP-запросы в Bitrix"
+        )
+
+
 _WRITE_METHOD_PARTS = frozenset(
     {
         "add",
@@ -102,6 +116,7 @@ class BitrixReadOnlyClient:
         return f"{self.webhook_url}/{method}"
 
     def call(self, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        assert_bitrix_http_allowed()
         assert_read_only_method(method, payload)
         attempt = 0
 

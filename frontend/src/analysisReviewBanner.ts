@@ -1,6 +1,7 @@
 import {
   formatMoscowReviewStamp,
   isMoscowDateTimeOnOrAfter,
+  businessNow,
 } from './dateTime.ts'
 
 const CARD_UNCHANGED_STATUSES = new Set(['skip', 'mini'])
@@ -23,7 +24,7 @@ export function reviewHeadlineAt(input: ReviewBannerInput): string | null {
   return laterUnchangedCheck(input) ? input.checkedAt ?? null : input.createdAt ?? null
 }
 
-export function reviewFromLabel(createdAt?: string | null, now: Date = new Date()): string {
+export function reviewFromLabel(createdAt?: string | null, now: Date = businessNow()): string {
   const stamp = createdAt ? formatMoscowReviewStamp(createdAt, now) : null
   return stamp ? `AI-анализ от ${stamp}` : 'AI-анализ готов'
 }

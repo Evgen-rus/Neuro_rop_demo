@@ -170,6 +170,7 @@ from api.manager_trajectory_ui import (
     day_export_filename as manager_trajectory_day_export_filename,
 )
 from openai_api.bitrix_links import bitrix_entity_url
+from app_clock import app_now, runtime_info
 from setup import BASE_DIR, MSK_TZ
 from storage import rop_db as storage
 from storage.rop_db import (
@@ -839,7 +840,14 @@ def health() -> dict[str, Any]:
         "service": "rop-assistant-api",
         "db_path": str(DEFAULT_DB_PATH),
         "daytime_cycle": daytime_cycle_status(),
+        **runtime_info(),
     }
+
+
+@app.get("/api/runtime")
+def runtime() -> dict[str, Any]:
+    """Frontend source of truth for demo/production business time."""
+    return runtime_info()
 
 
 @app.get("/api/automatic-analysis/latest")
@@ -2672,9 +2680,9 @@ def save_lead_workflow(lead_id: str, body: LeadWorkflowRequest) -> dict[str, Any
     if saved.get("control_mode"):
         state, decision = "snoozed", "Назначен контроль"
         if saved.get("control_mode") == "days":
-            next_control_date = (datetime.now(MSK_TZ).date() + timedelta(days=int(saved.get("control_days") or 1))).isoformat()
+            next_control_date = (app_now().date() + timedelta(days=int(saved.get("control_days") or 1))).isoformat()
         elif saved.get("control_mode") == "daily":
-            next_control_date = (datetime.now(MSK_TZ).date() + timedelta(days=1)).isoformat()
+            next_control_date = (app_now().date() + timedelta(days=1)).isoformat()
         else:
             next_control_date = str(saved.get("control_date") or "") or None
     else:
@@ -2859,7 +2867,7 @@ def report_decision(report_id: int, body: DecisionRequest) -> dict[str, Any]:
             state="snoozed",
             report_id=report_id,
             decision=body.decision,
-            next_control_date=(datetime.now(MSK_TZ).date() + timedelta(days=2)).isoformat(),
+            next_control_date=(app_now().date() + timedelta(days=2)).isoformat(),
             **_candidate_review_values(report),
         )
     elif body.decision == "Вернуть в контроль":
