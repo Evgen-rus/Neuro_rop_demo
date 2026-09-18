@@ -311,6 +311,63 @@ class ManagerTrajectorySourcesTests(unittest.TestCase):
         self.assertEqual(fact["payload"]["to_value"], "2026-08-21")
         self.assertEqual(fact["manager_id"], "10")
 
+    def test_task_history_skips_new_field_for_leads_only(self) -> None:
+        class MixedTaskClient(FakeClient):
+            def safe_list_all(self, method: str, payload: dict) -> dict:
+                self.list_calls.append((method, payload))
+                if method == "task.ctasklogitem.list":
+                    task_id = str(payload.get("TASKID") or "")
+                    created = "2026-08-21T10:05:00+03:00"
+                    if task_id == "lead-task":
+                        return {
+                            "ok": True,
+                            "items": [
+                                {
+                                    "ID": "n1", "TASK_ID": "lead-task", "FIELD": "NEW",
+                                    "USER_ID": "10", "CREATED_DATE": created,
+                                },
+                                {
+                                    "ID": "d1", "TASK_ID": "lead-task", "FIELD": "DEADLINE",
+                                    "FROM_VALUE": "2026-08-20", "TO_VALUE": "2026-08-21",
+                                    "USER_ID": "10", "CREATED_DATE": created,
+                                },
+                            ],
+                        }
+                    if task_id == "deal-task":
+                        return {
+                            "ok": True,
+                            "items": [{
+                                "ID": "dn1", "TASK_ID": "deal-task", "FIELD": "NEW",
+                                "USER_ID": "10", "CREATED_DATE": created,
+                            }],
+                        }
+                return super().safe_list_all(method, payload)
+
+        result = collect_task_history_facts(
+            MixedTaskClient(),
+            [
+                {
+                    "provider_id": "CRM_TASKS_TASK",
+                    "associated_entity_id": "lead-task",
+                    "entity_type": "lead",
+                    "entity_id": "202",
+                    "responsible_id": "10",
+                },
+                {
+                    "provider_id": "CRM_TASKS_TASK",
+                    "associated_entity_id": "deal-task",
+                    "entity_type": "deal",
+                    "entity_id": "101",
+                    "responsible_id": "10",
+                },
+            ],
+            ["10"],
+        )
+        self.assertFalse(result["errors"])
+        keys = {(item["entity_type"], item["payload"]["field"]) for item in result["facts"]}
+        self.assertNotIn(("lead", "NEW"), keys)
+        self.assertEqual(keys, {("lead", "DEADLINE"), ("deal", "NEW")})
+
     def test_deadline_unix_from_to_are_normalized_to_iso(self) -> None:
         class UnixDeadlineClient(FakeClient):
             def safe_list_all(self, method: str, payload: dict) -> dict:

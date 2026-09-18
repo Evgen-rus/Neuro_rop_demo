@@ -593,6 +593,64 @@ class ManagerTrajectoryUiProjectionTests(_ManagerTrajectoryUiFixture):
                 manager_id="10", event_id=str(status_change["id"]), value=DAY, db_path=self.db_path,
             )
 
+    def test_lead_task_history_new_stays_in_storage_but_not_on_screen(self) -> None:
+        lead_new = record_manager_trajectory_event(
+            self.db_path, entity_type="lead", entity_id="202", manager_id="10",
+            event_type="crm_task_history_observed", source="bitrix_tasks",
+            source_event_key="lead-task-new", occurred_at=(START + timedelta(minutes=16)).isoformat(),
+            payload={"task_id": "58305", "field": "NEW"},
+        )
+        lead_deadline = record_manager_trajectory_event(
+            self.db_path, entity_type="lead", entity_id="202", manager_id="10",
+            event_type="crm_task_history_observed", source="bitrix_tasks",
+            source_event_key="lead-task-deadline", occurred_at=(START + timedelta(minutes=17)).isoformat(),
+            payload={"task_id": "58305", "field": "DEADLINE", "from_value": "a", "to_value": "b"},
+        )
+        deal_new = record_manager_trajectory_event(
+            self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+            event_type="crm_task_history_observed", source="bitrix_tasks",
+            source_event_key="deal-task-new", occurred_at=(START + timedelta(minutes=36)).isoformat(),
+            payload={"task_id": "700", "field": "NEW"},
+        )
+        stored = list_manager_trajectory_events(
+            self.db_path,
+            from_at=datetime.combine(DAY, datetime.min.time(), tzinfo=MSK_TZ).isoformat(),
+            to_at=datetime.combine(DAY + timedelta(days=1), datetime.min.time(), tzinfo=MSK_TZ).isoformat(),
+            manager_ids=["10"],
+        )
+        self.assertIn(lead_new["id"], {item["id"] for item in stored})
+
+        window = build_window_projection(
+            manager_id="10", from_at=START, to_at=START + timedelta(hours=1), db_path=self.db_path,
+        )
+        entity = build_entity_projection(entity_type="lead", entity_id="202", value=DAY, db_path=self.db_path)
+        deal = build_entity_projection(entity_type="deal", entity_id="101", value=DAY, db_path=self.db_path)
+        export = build_day_export(value=DAY, db_path=self.db_path)
+        visible_ids = {item["event_id"] for item in window["events"]}
+        self.assertNotIn(lead_new["id"], visible_ids)
+        self.assertIn(lead_deadline["id"], visible_ids)
+        self.assertIn(deal_new["id"], visible_ids)
+        self.assertEqual(
+            [item["event_id"] for item in entity["chronology"] if item.get("label") == "Изменение задачи"],
+            [lead_deadline["id"]],
+        )
+        self.assertIn(deal_new["id"], {item["event_id"] for item in deal["chronology"]})
+        exported_lead = next(
+            item for item in export["managers"][0]["workday"]["entities"] if item["entity_id"] == "202"
+        )
+        self.assertEqual(
+            [item["event_id"] for item in exported_lead["task_history"]],
+            [lead_deadline["id"]],
+        )
+        with self.assertRaisesRegex(LookupError, "Событие не найдено"):
+            build_event_detail_projection(
+                manager_id="10", event_id=str(lead_new["id"]), value=DAY, db_path=self.db_path,
+            )
+        deal_detail = build_event_detail_projection(
+            manager_id="10", event_id=str(deal_new["id"]), value=DAY, db_path=self.db_path,
+        )
+        self.assertEqual(deal_detail["label"], "Изменение задачи")
+
     def test_filters_and_entity_projection_are_lazy(self) -> None:
         day = build_day_projection(value=DAY, category="leads", query="Бета", db_path=self.db_path)
         self.assertEqual(day["totals"]["events"], 1)

@@ -16,6 +16,7 @@ from api.manager_trajectory_sources import (
     collect_task_history_facts,
     collect_timeline_comment_facts,
     fetch_activity_facts,
+    is_lead_task_history_new_field,
 )
 from bitrix.client import BitrixReadOnlyClient
 from bitrix.customer_history import messenger_mirror_from_comment
@@ -283,6 +284,10 @@ def collect_manager_trajectory(
             if manager_id not in allowed:
                 continue
             payload = fact.get("payload") if isinstance(fact.get("payload"), dict) else {}
+            if is_lead_task_history_new_field(
+                entity_type=fact.get("entity_type"), field=payload.get("field"),
+            ):
+                continue
             if (
                 source_name == "timeline"
                 and payload.get("is_messenger_mirror")
@@ -340,6 +345,18 @@ def _event_datetime(event: dict[str, Any]) -> datetime:
 def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     payload = event.get("payload")
     return payload if isinstance(payload, dict) else {}
+
+
+def _excluded_from_working_trajectory(item: dict[str, Any]) -> bool:
+    event_type = str(item.get("event_type") or "")
+    if event_type == "crm_business_field_changed":
+        return True
+    if event_type == "crm_task_history_observed":
+        payload = _event_payload(item)
+        return is_lead_task_history_new_field(
+            entity_type=item.get("entity_type"), field=payload.get("field"),
+        )
+    return False
 
 
 def _crm_action(event: dict[str, Any]) -> dict[str, Any]:
@@ -824,7 +841,7 @@ def build_manager_trajectory_report(
         rows = [item for item in events if str(item.get("manager_id") or "") == manager_id]
         report_rows = [
             item for item in rows
-            if item.get("event_type") != "crm_business_field_changed"
+            if not _excluded_from_working_trajectory(item)
         ]
         detail_actions = [
             _detail_action(item) for item in report_rows

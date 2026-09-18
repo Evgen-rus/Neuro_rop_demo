@@ -345,6 +345,89 @@ class ManagerTrajectoryCollectionTests(unittest.TestCase):
         )
         self.assertEqual(report["managers"][0]["counts"]["crm_activity_observed"], 2)
 
+    def test_lead_task_history_new_is_not_collected_or_reported(self) -> None:
+        class LeadTaskClient(FakeBitrixClient):
+            def safe_list_all(self, method, payload):
+                if method == "crm.activity.list":
+                    result = super().safe_list_all(method, payload)
+                    result["items"] = [
+                        *result["items"],
+                        {
+                            "ID": "lead-task-act", "OWNER_TYPE_ID": "1", "OWNER_ID": "901",
+                            "RESPONSIBLE_ID": "10", "TYPE_ID": "6", "PROVIDER_ID": "CRM_TASKS_TASK",
+                            "ASSOCIATED_ENTITY_ID": "58305", "COMPLETED": "N",
+                            "START_TIME": "2026-08-16T19:33:00+03:00",
+                            "LAST_UPDATED": "2026-08-16T19:33:00+03:00",
+                        },
+                        {
+                            "ID": "deal-task-act", "OWNER_TYPE_ID": "2", "OWNER_ID": "900",
+                            "RESPONSIBLE_ID": "10", "TYPE_ID": "6", "PROVIDER_ID": "CRM_TASKS_TASK",
+                            "ASSOCIATED_ENTITY_ID": "700", "COMPLETED": "N",
+                            "START_TIME": "2026-08-16T19:34:00+03:00",
+                            "LAST_UPDATED": "2026-08-16T19:34:00+03:00",
+                        },
+                    ]
+                    return result
+                if method == "task.ctasklogitem.list":
+                    task_id = str(payload.get("TASKID") or "")
+                    created = "2026-08-16T19:33:00+03:00"
+                    if task_id == "58305":
+                        return {"ok": True, "items": [
+                            {
+                                "ID": "lead-new", "TASK_ID": "58305", "FIELD": "NEW",
+                                "USER_ID": "10", "CREATED_DATE": created,
+                            },
+                            {
+                                "ID": "lead-deadline", "TASK_ID": "58305", "FIELD": "DEADLINE",
+                                "FROM_VALUE": "2026-08-20", "TO_VALUE": "2026-08-21",
+                                "USER_ID": "10", "CREATED_DATE": created,
+                            },
+                        ]}
+                    if task_id == "700":
+                        return {"ok": True, "items": [{
+                            "ID": "deal-new", "TASK_ID": "700", "FIELD": "NEW",
+                            "USER_ID": "10", "CREATED_DATE": created,
+                        }]}
+                    return {"ok": True, "items": []}
+                return super().safe_list_all(method, payload)
+
+        result = collect_manager_trajectory(
+            LeadTaskClient(), db_path=self.db_path,
+            from_at=NOW - timedelta(days=1), to_at=NOW,
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["counts"]["task_history"], 2)
+        events = list_manager_trajectory_events(
+            self.db_path, from_at=(NOW - timedelta(days=1)).isoformat(),
+            to_at=NOW.isoformat(), manager_ids=["10"],
+        )
+        task_history = [
+            item for item in events if item["event_type"] == "crm_task_history_observed"
+        ]
+        keys = {(item["entity_type"], item["payload"]["field"]) for item in task_history}
+        self.assertEqual(keys, {("lead", "DEADLINE"), ("deal", "NEW")})
+
+        leftover_lead_new = record_manager_trajectory_event(
+            self.db_path, entity_type="lead", entity_id="901", manager_id="10",
+            event_type="crm_task_history_observed", source="fixture",
+            source_event_key="legacy-lead-new",
+            occurred_at=(NOW - timedelta(hours=1)).isoformat(),
+            payload={"task_id": "58305", "field": "NEW"},
+        )
+        report = build_manager_trajectory_report(
+            db_path=self.db_path, from_at=NOW - timedelta(days=1), to_at=NOW,
+        )
+        manager = report["managers"][0]
+        self.assertEqual(manager["counts"].get("crm_task_history_observed"), 2)
+        reported = {
+            (item["entity_type"], item["payload"]["field"], item["event_id"])
+            for entity in manager["workday"]["entities"]
+            for item in entity.get("task_history") or []
+        }
+        self.assertTrue(any(key[:2] == ("lead", "DEADLINE") for key in reported))
+        self.assertTrue(any(key[:2] == ("deal", "NEW") for key in reported))
+        self.assertFalse(any(key[2] == leftover_lead_new["id"] for key in reported))
+
     def test_disabled_manager_is_not_requested_or_shown(self) -> None:
         create_auth_user(self.db_path, login="admin", password_hash="hash", role="admin")
         manager = create_auth_user(

@@ -133,6 +133,12 @@ def _string(value: Any) -> str | None:
     return text or None
 
 
+def is_lead_task_history_new_field(*, entity_type: Any, field: Any) -> bool:
+    # В журнале задач Bitrix FIELD=NEW — задача появилась, а не срок/статус.
+    # Для лидов это не считаем работой менеджера; сделки не трогаем.
+    return str(entity_type or "").strip().lower() == "lead" and str(field or "").strip().upper() == "NEW"
+
+
 def _iso(value: Any) -> str | None:
     parsed = parse_bitrix_dt(value)
     if parsed is None:
@@ -508,6 +514,8 @@ def collect_task_history_facts(client: Any, activities: Iterable[dict[str, Any]]
         entity_type, _, entity_id = entity_key.partition(":")
         for item in _result_items(response):
             field = _string(item.get("FIELD")) or "unknown"
+            if is_lead_task_history_new_field(entity_type=entity_type, field=field):
+                continue
             history_id = _string(item.get("ID"))
             created = _first_datetime(item, ("CREATED_DATE", "CREATED", "DATE_CREATE"))
             user_id = _string(item.get("USER_ID") or item.get("AUTHOR_ID"))
