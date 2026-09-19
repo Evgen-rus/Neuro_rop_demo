@@ -170,7 +170,7 @@ from api.manager_trajectory_ui import (
     day_export_filename as manager_trajectory_day_export_filename,
 )
 from openai_api.bitrix_links import bitrix_entity_url
-from app_clock import app_now, runtime_info
+from app_clock import app_now, resolve_persisted_path, runtime_info
 from setup import BASE_DIR, MSK_TZ
 from storage import rop_db as storage
 from storage.rop_db import (
@@ -538,7 +538,7 @@ class AuthPasswordRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
-_PUBLIC_PATHS = {"/api/health", "/api/auth/login", "/api/auth/logout"}
+_PUBLIC_PATHS = {"/api/health", "/api/runtime", "/api/auth/login", "/api/auth/logout"}
 _SAFE_ORIGINS = {
     "http://127.0.0.1:5173",
     "http://localhost:5173",
@@ -2480,7 +2480,7 @@ def _analysis_trace_payload(report: dict[str, Any]) -> dict[str, Any]:
 
 def _report_markdown_path(report: dict[str, Any]) -> Path:
     configured_value = str(report.get("report_path") or "").strip()
-    configured = Path(configured_value) if configured_value else Path("__missing_report__.md")
+    configured = resolve_persisted_path(configured_value) if configured_value else Path("__missing_report__.md")
     if configured.is_file():
         return configured
     entity_type = str(report.get("entity_type") or "")
@@ -2774,7 +2774,7 @@ def report_detail(report_id: int, include_markdown: bool = False) -> dict[str, A
     payload["markdown_available"] = _report_markdown_path(report).exists()
     payload["technical_log_available"] = bool(report.get("technical_log"))
     if include_markdown:
-        md_path = Path(str(report.get("report_path") or ""))
+        md_path = resolve_persisted_path(report.get("report_path"))
         if md_path.exists():
             payload["report_markdown"] = md_path.read_text(encoding="utf-8")
         else:

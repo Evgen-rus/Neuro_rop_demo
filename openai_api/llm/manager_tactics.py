@@ -5,13 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from app_clock import resolve_knowledge_dir
+
 
 MANAGER_TACTICS_PATH = Path(__file__).resolve().parents[2] / "knowledge" / "clients" / "praktikm" / "manager_tactics.md"
 MAX_MANAGER_TACTICS_CHARS = 24000
 
 
 def load_manager_tactics() -> str:
-    text = MANAGER_TACTICS_PATH.read_text(encoding="utf-8").strip()
+    # В DEMO_MODE читаем runtime-копию snapshot, tracked knowledge не перезаписываем.
+    path = resolve_knowledge_dir() / "manager_tactics.md"
+    text = path.read_text(encoding="utf-8").strip()
     if not text:
         raise ValueError("База практических тактик менеджера пуста")
     return text[:MAX_MANAGER_TACTICS_CHARS]

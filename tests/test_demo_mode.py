@@ -8,7 +8,15 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from app_clock import app_now, business_date, is_demo_mode, runtime_info
+from app_clock import (
+    app_now,
+    business_date,
+    is_demo_mode,
+    resolve_knowledge_dir,
+    resolve_persisted_path,
+    runtime_info,
+)
+from setup import BASE_DIR, MSK_TZ
 from api.daytime_cycle import daytime_cycle_enabled, start_daytime_cycle, stop_daytime_cycle
 from api.deal_control import (
     _deadline_bucket,
@@ -19,7 +27,6 @@ from api.deal_control import (
 )
 from bitrix.client import BitrixDemoBlockedError, BitrixReadOnlyClient
 from bitrix.deals.download_deals_call_audio import try_download_url
-from setup import MSK_TZ
 from storage.rop_db import init_db, save_ui_report, upsert_deal_control_deal
 from tests.test_bitrix_usage_trace import FakeResponse, NO_RETRY
 from tests.test_deal_manager_quick_help import ImmediateThread
@@ -146,12 +153,49 @@ class DemoModeDealControlTests(unittest.TestCase):
 
     def test_runtime_endpoint_exposes_demo_clock(self) -> None:
         with patch.dict(os.environ, DEMO_ENV, clear=False):
-            from api.app import runtime
+            from api.app import _PUBLIC_PATHS, runtime
 
             payload = runtime()
+        self.assertIn("/api/runtime", _PUBLIC_PATHS)
         self.assertTrue(payload["demo_mode"])
         self.assertEqual(payload["current_business_datetime"], DEMO_NOW)
         self.assertEqual(payload["business_date"], "2026-09-18")
+
+
+class DemoModePathResolutionTests(unittest.TestCase):
+    def test_production_keeps_container_paths(self) -> None:
+        stored = "/app/reports/rop_assistant/deals/deal_1/analysis/deal_1_rop_report.md"
+        with patch.dict(os.environ, {"DEMO_MODE": "false"}, clear=False):
+            self.assertEqual(resolve_persisted_path(stored), Path(stored))
+            self.assertEqual(
+                resolve_knowledge_dir(),
+                BASE_DIR / "knowledge" / "clients" / "praktikm",
+            )
+
+    def test_demo_maps_app_reports_to_local_tree(self) -> None:
+        stored = "/app/reports/rop_assistant/deals/deal_1/analysis/deal_1_rop_report.md"
+        with patch.dict(os.environ, DEMO_ENV, clear=False):
+            mapped = resolve_persisted_path(stored)
+            self.assertEqual(
+                mapped,
+                BASE_DIR / "reports" / "rop_assistant" / "deals" / "deal_1" / "analysis" / "deal_1_rop_report.md",
+            )
+            local = BASE_DIR / "reports" / "local.md"
+            self.assertEqual(resolve_persisted_path(str(local)), local)
+
+    def test_demo_maps_knowledge_to_runtime_copy_when_present(self) -> None:
+        stored = "/app/knowledge/clients/praktikm/manager_tactics.md"
+        with patch.dict(os.environ, DEMO_ENV, clear=False), tempfile.TemporaryDirectory() as directory:
+            runtime_root = Path(directory) / "runtime" / "knowledge"
+            runtime_file = runtime_root / "clients" / "praktikm" / "manager_tactics.md"
+            runtime_file.parent.mkdir(parents=True, exist_ok=True)
+            runtime_file.write_text("tactics", encoding="utf-8")
+            with patch("app_clock.BASE_DIR", Path(directory)):
+                self.assertEqual(resolve_persisted_path(stored), runtime_file)
+                self.assertEqual(
+                    resolve_knowledge_dir(),
+                    Path(directory) / "runtime" / "knowledge" / "clients" / "praktikm",
+                )
 
 
 class DemoModeLlmTests(unittest.TestCase):

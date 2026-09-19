@@ -37,7 +37,7 @@ from api.deal_manager_situation import (
 )
 from openai_api.llm.deal_manager_quick_help import ASSISTANT_MODES, generate_deal_manager_quick_help
 from openai_api.llm.llm_client import ModelJsonParseError, ModelResponseIncompleteError
-from app_clock import app_now
+from app_clock import app_now, resolve_persisted_path
 from setup import MSK_TZ
 
 logger = logging.getLogger(__name__)
@@ -838,7 +838,7 @@ def get_manager_assistant_workspace(
         else []
     )
     report = context.get("report") if isinstance(context.get("report"), dict) else {}
-    report_path = Path(str(report.get("report_path") or "")) if report.get("report_path") else None
+    report_path = resolve_persisted_path(report.get("report_path")) if report.get("report_path") else None
     return {
         "started": bool(entries),
         "entries": entries,

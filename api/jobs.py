@@ -30,6 +30,7 @@ from progress_events import (
     compact_decision_status,
     progress_key,
 )
+from app_clock import resolve_persisted_path
 from setup import BASE_DIR, MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -572,7 +573,7 @@ def build_model_context_snapshot(envelope: dict[str, Any] | None) -> dict[str, A
         if not isinstance(raw_path, str) or not raw_path.strip():
             return None
         try:
-            return Path(raw_path).read_text(encoding="utf-8")
+            return resolve_persisted_path(raw_path).read_text(encoding="utf-8")
         except OSError:
             return None
 

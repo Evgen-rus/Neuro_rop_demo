@@ -18,6 +18,8 @@ load_dotenv(BASE_DIR / ".env")
 
 _TRUE = {"1", "true", "yes", "on"}
 _PRODUCTION_DB_RELATIVE = Path("reports") / "rop_assistant" / "rop_assistant.sqlite"
+_CONTAINER_ROOT = "/app"
+_CONTAINER_KNOWLEDGE_PREFIX = "/app/knowledge"
 
 
 def _read_bool_env(name: str, default: bool) -> bool:
@@ -93,6 +95,37 @@ def resolve_db_path() -> Path:
         return BASE_DIR / _PRODUCTION_DB_RELATIVE
     path = Path(raw)
     return path if path.is_absolute() else BASE_DIR / path
+
+
+def resolve_knowledge_dir() -> Path:
+    """OKF/tactics: в demo берём runtime-копию snapshot, иначе tracked knowledge."""
+    tracked = BASE_DIR / "knowledge" / "clients" / "praktikm"
+    if not is_demo_mode():
+        return tracked
+    runtime_dir = BASE_DIR / "runtime" / "knowledge" / "clients" / "praktikm"
+    return runtime_dir if runtime_dir.is_dir() else tracked
+
+
+def resolve_persisted_path(value: str | Path | None) -> Path:
+    """Открыть сохранённый путь. В DEMO_MODE ``/app/...`` указывает на локальное дерево."""
+    text = str(value or "").strip()
+    if not text:
+        return Path("__missing_persisted_path__")
+    path = Path(text)
+    if not is_demo_mode():
+        return path
+    posix = text.replace("\\", "/")
+    if posix == _CONTAINER_KNOWLEDGE_PREFIX or posix.startswith(_CONTAINER_KNOWLEDGE_PREFIX + "/"):
+        suffix = posix[len(_CONTAINER_KNOWLEDGE_PREFIX) :].lstrip("/")
+        root = BASE_DIR / "runtime" / "knowledge"
+        if not root.is_dir():
+            root = BASE_DIR / "knowledge"
+        return root / suffix if suffix else root
+    if posix == _CONTAINER_ROOT:
+        return BASE_DIR
+    if posix.startswith(_CONTAINER_ROOT + "/"):
+        return BASE_DIR / posix[len(_CONTAINER_ROOT) + 1 :]
+    return path
 
 
 def runtime_info() -> dict[str, object]:
