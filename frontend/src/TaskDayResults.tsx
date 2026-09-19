@@ -1,5 +1,6 @@
 import type { DailyTaskResult } from './api'
 import { formatMoscowDateTime } from './dateTime'
+import { maskDemoText } from './demoDisplay'
 import { sortDayTasks, taskDeadlineLabel, tasksStripSummary } from './dailyControlView'
 import { TaskReschedulePopover } from './TaskReschedulePopover'
 
@@ -28,7 +29,7 @@ export function TaskDayResults({ tasks, cutoffAt }: { tasks?: DailyTaskResult[];
           const label = taskDeadlineLabel(task, cutoffAt)
           return (
             <div key={task.key}>
-              <span>{task.subject}</span>
+              <span>{maskDemoText(task.subject)}</span>
               <b className={label.kind}>{label.text}</b>
               {task.status === 'completed' ? <small>Срок: {deadline(task.deadline)}</small> : null}
               {task.completed_today && task.status !== 'completed' ? <small>Выполнялась в этот день</small> : null}

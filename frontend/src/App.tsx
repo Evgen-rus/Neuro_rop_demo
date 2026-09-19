@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import './index.css'
 import { DealControl } from './DealControl'
 import { formatMoscowDateTime, moscowDateInputValue } from './dateTime'
-import { displayDealTitle, isDemoMode, maskDealTitleInText } from './demoDisplay'
+import { displayDealTitle, isDemoMode, maskDemoText } from './demoDisplay'
 import {
   asRecord,
   asString,
@@ -1619,7 +1619,9 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
                       {runResult.recommended_action ? <p>{runResult.recommended_action}</p> : null}
                       {runResult.report_id ? <button className="btn ghost" onClick={() => void openHistoryReport(Number(runResult.report_id))}>Открыть отчёт</button> : null}
                     </> : <>
-                      <p>{candidate.entity_type === 'deal' ? maskDealTitleInText(candidate.attention_reason, candidate.entity_id, candidate.title) : candidate.attention_reason}</p>
+                      <p>{maskDemoText(candidate.attention_reason, candidate.entity_type === 'deal'
+                        ? { deal_id: candidate.entity_id, title: candidate.title }
+                        : undefined)}</p>
                       <div className="reason-codes">{(candidate.reason_codes || []).map((code) => <span key={code}>{code}</span>)}</div>
                       <div className="candidate-meta">Анализ: {candidate.analysis_freshness || 'missing'} · звонки: {asString(candidate.call_method?.attempts, '0')} · входящие: {asString(candidate.call_method?.incoming, '0')} · исходящие: {asString(candidate.call_method?.outgoing, '0')}</div>
                       {progress && checked && dailyRun?.status !== 'draft' ? <EntityProgressView progress={progress} /> : candidate.entity_type === 'lead' ? <LeadQualificationStrip summary={candidate.lead_qualification} hasAnalysis={Boolean(candidate.lead_analysis_available || candidate.analyzed)} category={candidate.lead_category} /> : null}
@@ -1886,7 +1888,9 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
                     {formatMoneyText(item.status)}
                     {item.amount ? ` · ${formatMoney(item.amount)}` : ''}
                     <br />
-                    {formatMoneyText(item.entity_type === 'deal' ? maskDealTitleInText(item.attention_reason, item.entity_id, item.title) : item.attention_reason)}
+                    {formatMoneyText(maskDemoText(item.attention_reason, item.entity_type === 'deal'
+                      ? { deal_id: item.entity_id, title: item.title }
+                      : undefined))}
                     {item.crm_updated_after_review ? <><br />CRM обновлена после решения РОПа</> : null}
                   </small>
                   {item.entity_type === 'lead' ? <LeadQualificationStrip summary={item.lead_qualification} hasAnalysis={Boolean(item.lead_analysis_available || item.analyzed)} category={item.lead_category} /> : null}
@@ -2315,7 +2319,8 @@ function ReportPanels(props: ReportPanelsProps) {
 }
 
 function ExpandableText(props: { text: string; className?: string }) {
-  const { text, className = '' } = props
+  const { className = '' } = props
+  const text = maskDemoText(props.text)
   const elementRef = useRef<HTMLParagraphElement>(null)
   const [expanded, setExpanded] = useState(false)
   const [canExpand, setCanExpand] = useState(false)
@@ -2364,8 +2369,8 @@ function CommunicationSummaryItem(props: { title: string; item?: LeadReportActiv
         <span>{meta}{duration}</span>
       </summary>
       <div className="communication-summary-body">
-        {item.contact_label ? <b>{item.contact_label}</b> : null}
-        {item.subject ? <span>{item.subject}</span> : null}
+        {item.contact_label ? <b>{maskDemoText(item.contact_label)}</b> : null}
+        {item.subject ? <span>{maskDemoText(item.subject)}</span> : null}
         {item.text ? <ExpandableText text={item.text} /> : <span className="muted">Текст события в CRM отсутствует</span>}
         {item.transcript_text ? (
           <details className="communication-transcript">
@@ -2708,9 +2713,9 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
               {materialTab === 'summary' ? <div className="material-summary"><h3>Краткий вывод</h3><p><strong>Вывод:</strong> {formatMoneyText(asString(leadState.summary)) || meta.attention_reason || 'Нет данных'}</p><p><strong>Поручение:</strong> {formatMoneyText(asString(rop.message_to_manager)) || workflow.manager_task_text || 'Нет данных'}</p><p><strong>Критерий проверки:</strong> {formatMoneyText(asString(rop.success_condition)) || 'Нет данных'}</p></div> : null}
               {materialTab === 'bant' ? <div className="material-bant"><h3>Полный BANT</h3>{bantItems.map((item) => <article key={item.key}><h4>{item.letter} · {item.label} — {assessmentLabel(asString(item.value.status, 'unknown'), BANT_STATUS_RU)}</h4><p>{formatMoneyText(asString(item.value.summary) || asString(item.value.explanation)) || 'Пояснение отсутствует'}</p><b>Доказательства</b><ul>{asStringList(item.value.evidence).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.evidence).length ? <li>Нет подтверждённых фактов</li> : null}</ul><b>Чего не хватает</b><ul>{asStringList(item.value.missing_facts).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.missing_facts).length ? <li>Не указано</li> : null}</ul></article>)}<article><h4>Категория {categoryValue}</h4><p>{formatMoneyText(asString(category.reason)) || 'Обоснование отсутствует'}</p><p><strong>Маршрут:</strong> {assessmentLabel(asString(route.status, 'unknown'), LEAD_ROUTE_STATUS_RU)}</p><p><strong>Техническая применимость:</strong> {assessmentLabel(asString(solutionFit.status, 'unknown'), SOLUTION_FIT_STATUS_RU)}</p><p><strong>Бюджет нового оборудования:</strong> {assessmentLabel(asString(commercialFit.new_equipment_budget_status, 'unknown'), COMMERCIAL_FIT_STATUS_RU)}</p></article>{!readOnly ? <div className="qualification-feedback"><h4>Проверка РОПом</h4>{latestQualificationReview ? <p className="muted">Последняя проверка: {latestQualificationReview.is_correct ? 'оценка верна' : 'есть исправления'} · {asString(latestQualificationReview.created_at)}</p> : null}<button onClick={() => props.onQualificationReview({ is_correct: true })}>Оценка верна</button><div className="qualification-issue-grid">{Object.entries(QUALIFICATION_ISSUE_LABELS).map(([key, label]) => <label key={key}><input type="checkbox" checked={qualificationIssues.includes(key)} onChange={() => setQualificationIssues((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])} />{label}</label>)}</div><textarea placeholder="Как должно быть и на каком факте это основано" value={qualificationComment} onChange={(event) => setQualificationComment(event.target.value)} /><button disabled={!qualificationIssues.length} onClick={() => { props.onQualificationReview({ is_correct: false, issue_fields: qualificationIssues, comment: qualificationComment || null }); setQualificationIssues([]); setQualificationComment('') }}>Сохранить исправление</button></div> : null}</div> : null}
               {materialTab === 'evidence' ? <div><h3>Доказательства</h3><ul>{[...new Set(evidence)].map((item) => <li key={item}>{item}</li>)}{!evidence.length ? <li>Доказательства в этом анализе отсутствуют.</li> : null}</ul><h3>Недостающие данные</h3><ul>{props.unknowns.map((item) => <li key={item}>{item}</li>)}{!props.unknowns.length ? <li>Пробелы не выделены.</li> : null}</ul></div> : null}
-              {materialTab === 'audit' ? <div><h3>Аудитный отчёт</h3>{!reportDetail?.markdown_available ? <p className="muted">Для этого отчёта Markdown недоступен.</p> : props.markdown ? <div className="markdown">{formatMoneyText(props.markdown)}</div> : <p className="muted">Загрузка отчёта…</p>}</div> : null}
+              {materialTab === 'audit' ? <div><h3>Аудитный отчёт</h3>{!reportDetail?.markdown_available ? <p className="muted">Для этого отчёта Markdown недоступен.</p> : props.markdown ? <div className="markdown">{formatMoneyText(maskDemoText(props.markdown))}</div> : <p className="muted">Загрузка отчёта…</p>}</div> : null}
               {materialTab === 'history' ? <div><h3>История анализов и решений</h3><ul className="material-history">{reportDetail?.entity_history?.map((item) => <li key={asString(item.id)}><strong>Отчёт #{asString(item.id)}</strong><span>{asString(item.created_at)} · {riskLabelRu(asString(item.risk_level))}</span><p>{asString(item.attention_reason)}</p></li>)}</ul><h4>Решения РОПа</h4><ul>{props.decisions?.map((item) => <li key={asString(item.id)}>{asString(item.created_at)} · {asString(item.decision)}</li>)}{!props.decisions?.length ? <li>Решений пока нет.</li> : null}</ul><h4>Исходы</h4><ul>{props.outcomes?.map((item) => <li key={asString(item.id)}>{asString(item.checked_at)} · {asString(item.outcome_type)}</li>)}{!props.outcomes?.length ? <li>Исходы пока не зафиксированы.</li> : null}</ul></div> : null}
-              {materialTab === 'technical' ? <div><h3>Техническая информация</h3><p><strong>Источник workflow:</strong> отчёт #{workflow.source_report_id || 'не указан'}</p><p><strong>Этап CRM:</strong> {reportMeta.stage_name || reportMeta.stage_id || 'Нет данных'}</p><h4>Контекст, переданный модели</h4>{reportDetail?.model_context ? <div className="model-context"><section><h5>История CRM</h5><pre>{reportDetail.model_context.history_text || 'История CRM не была доступна в момент анализа.'}</pre></section><section><h5>Транскрипт, использованный в анализе</h5><pre>{reportDetail.model_context.transcript_used ? reportDetail.model_context.transcript_text || 'Текст транскрипта не сохранён.' : 'Для этого анализа транскрипт не использовался.'}</pre></section></div> : <p className="muted">Для этого старого отчёта снимок фактического контекста не сохранялся.</p>}<h4>Технический snapshot</h4>{reportDetail?.technical_log ? <pre className="technical-log">{JSON.stringify(reportDetail.technical_log, null, 2)}</pre> : <p className="muted">Очищенный технический snapshot отсутствует в старом отчёте.</p>}</div> : null}
+              {materialTab === 'technical' ? <div><h3>Техническая информация</h3><p><strong>Источник workflow:</strong> отчёт #{workflow.source_report_id || 'не указан'}</p><p><strong>Этап CRM:</strong> {reportMeta.stage_name || reportMeta.stage_id || 'Нет данных'}</p><h4>Контекст, переданный модели</h4>{reportDetail?.model_context ? <div className="model-context"><section><h5>История CRM</h5><pre>{maskDemoText(reportDetail.model_context.history_text) || 'История CRM не была доступна в момент анализа.'}</pre></section><section><h5>Транскрипт, использованный в анализе</h5><pre>{reportDetail.model_context.transcript_used ? maskDemoText(reportDetail.model_context.transcript_text) || 'Текст транскрипта не сохранён.' : 'Для этого анализа транскрипт не использовался.'}</pre></section></div> : <p className="muted">Для этого старого отчёта снимок фактического контекста не сохранялся.</p>}<h4>Технический snapshot</h4>{reportDetail?.technical_log ? <pre className="technical-log">{JSON.stringify(reportDetail.technical_log, null, 2)}</pre> : <p className="muted">Очищенный технический snapshot отсутствует в старом отчёте.</p>}</div> : null}
             </div>
           </aside>
         </div>
@@ -2730,8 +2735,9 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const dealState = asRecord(analysis?.deal_state)
   const realDealTitle = asString(dealState.title) || meta?.entity_title || ''
   function visibleDealCopy(text: string) {
-    if (meta?.entity_type !== 'deal') return text
-    return maskDealTitleInText(text, meta.entity_id, realDealTitle)
+    return maskDemoText(text, meta?.entity_type === 'deal'
+      ? { deal_id: meta.entity_id, title: realDealTitle }
+      : undefined)
   }
   const leadState = asRecord(analysis?.lead_state)
   const mainRisk = asRecord(analysis?.main_risk)

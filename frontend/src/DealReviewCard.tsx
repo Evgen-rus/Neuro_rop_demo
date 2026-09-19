@@ -615,6 +615,7 @@ export function DealReviewCard(props: {
                               channel: item.channel,
                               title: item.subject || item.participant_name,
                               occurredAt: item.occurred_at,
+                              mask: deal,
                             })
                           }}
                         >
@@ -624,7 +625,7 @@ export function DealReviewCard(props: {
                             <span>{[channelLabel(item.channel), directionLabel(item.direction)].filter(Boolean).join(' · ')}</span>
                             <span className={`dc-daily-event-status${attempt ? ' attempt' : ''}`}>{eventStatus(item)}</span>
                           </span>
-                          <span className="dc-daily-event-contact">{item.participant_name || item.subject || ''}</span>
+                          <span className="dc-daily-event-contact">{visibleDealText(deal, item.participant_name || item.subject || '')}</span>
                           <em className="dc-daily-event-duration">{eventDurationLabel(item)}</em>
                           <i className="dc-daily-event-chevron" aria-hidden="true">{canOpen ? '↗' : '—'}</i>
                         </button>

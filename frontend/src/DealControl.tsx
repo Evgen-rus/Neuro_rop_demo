@@ -392,7 +392,8 @@ function taskPlanTitle(view: TimeView) {
 }
 
 function compactTaskText(value: string, maxLength = 120) {
-  const normalized = value.replace(/\s+/g, ' ').trim()
+  const source = maskDemoText(value)
+  const normalized = source.replace(/\s+/g, ' ').trim()
   const firstSentence = normalized.match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim()
   if (firstSentence && firstSentence.length <= maxLength) return firstSentence
   if (normalized.length <= maxLength) return normalized
@@ -1378,8 +1379,8 @@ function TaskTable({
             <div className={`dc-comment-preview ${hasPreviewRows ? 'has-comments' : ''}`}>
               {!worklogPreview.entries.length && preview?.available === false ? <span className="dc-comment-preview-empty">Комментарии недоступны</span> : hasPreviewRows ? <>
                 <div className="dc-comment-preview-text">
-                  {worklogPreview.entries.slice(0, 3).map((entry, index) => <p className="worklog" key={`${entry.entry_date}:${index}`}><b>{shortDateOnly(entry.entry_date)}</b> {entry.text}</p>)}
-                  {preview?.items?.map((item) => <p key={item.id}><b>{shortDateOnly(item.created_at)}</b> {item.text}</p>)}
+                  {worklogPreview.entries.slice(0, 3).map((entry, index) => <p className="worklog" key={`${entry.entry_date}:${index}`}><b>{shortDateOnly(entry.entry_date)}</b> {maskDemoText(entry.text, deal)}</p>)}
+                  {preview?.items?.map((item) => <p key={item.id}><b>{shortDateOnly(item.created_at)}</b> {maskDemoText(item.text, deal)}</p>)}
                 </div>
                 <div className="dc-comment-preview-footer">
                   <span>{worklogPreview.entries.length ? `Журнал · ${worklogPreview.entryCount} записей` : preview?.count == null ? '—' : `${preview.count} записей`}</span>
@@ -1443,7 +1444,7 @@ function ManagerWorklogCard({
     <div className="dc-manager-worklog-entries">
       {visibleEntries.map((entry, index) => <div key={`${entry.entry_date}:${index}`}>
         <time>{worklogDate(entry.entry_date)}</time>
-        <p>{entry.text}</p>
+        <p>{maskDemoText(entry.text)}</p>
       </div>)}
     </div>
     {entries.length > 3 ? <button type="button" aria-expanded={expanded} onClick={onToggle}>{expanded ? 'Свернуть' : 'Показать весь журнал'}</button> : null}
@@ -1596,7 +1597,7 @@ function DealCommentsModal({
                 <h4 className="dc-comment-month">{group.label}</h4>
                 {group.comments.map((comment) => <div className="dc-comment-table-row" key={comment.id}>
                   <time>{comment.created_at ? formatMoscowDateTime(comment.created_at, { day: '2-digit', month: '2-digit' }) : '—'}</time>
-                  <div className="dc-comment-table-text">{comment.text || '—'}</div>
+                  <div className="dc-comment-table-text">{maskDemoText(comment.text, deal) || '—'}</div>
                 </div>)}
               </section>)}
             </div>
@@ -2513,7 +2514,7 @@ function ManagerSituationActions(props: {
           </div>
           {props.audioJob ? <div className={`dc-manager-audio-attachment ${props.audioJob.status}`} role="status" aria-live="polite">
             <div><strong>🎧 {props.audioJob.file_name}</strong><small>{props.audioJob.error || props.audioJob.detail}{props.audioJob.status === 'done' ? ' ✓' : ''}</small></div>
-            {props.audioJob.attachment?.transcript ? <details><summary>Показать текст</summary><p>{props.audioJob.attachment.transcript}</p></details> : null}
+            {props.audioJob.attachment?.transcript ? <details><summary>Показать текст</summary><p>{maskDemoText(props.audioJob.attachment.transcript, props.deal)}</p></details> : null}
             <button type="button" onClick={props.onRemoveAudio} disabled={audioBusy} aria-label="Убрать аудиозапись">×</button>
           </div> : null}
         </div>
@@ -3153,7 +3154,7 @@ function ManagerAssistantModal(props: {
             </div> : null}
             {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Готовим рекомендацию'}</small></div> : null}
           </section> : null}
-          {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><div><p>{maskDemoText(item.text, props.deal)}</p>{item.kind === 'communication' && item.channel ? <CommunicationContent dealId={props.deal.deal_id} eventId={item.id} channel={item.channel} /> : null}</div></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}
+          {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><div><p>{maskDemoText(item.text, props.deal)}</p>{item.kind === 'communication' && item.channel ? <CommunicationContent dealId={props.deal.deal_id} eventId={item.id} channel={item.channel} mask={props.deal} /> : null}</div></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}
           {view === 'context' ? <ManagerDealContextView
             deal={props.deal}
             dealId={props.deal.deal_id}
@@ -3185,7 +3186,7 @@ function ManagerAssistantModal(props: {
         {workspaceMode === 'lab' ? null : <footer className="dc-manager-composer">
           {view === 'answer' && props.audioJob ? <div className={`dc-manager-quick-help-audio ${props.audioJob.status}`}>
             <span aria-hidden="true">🎧</span>
-            <div><strong>{props.audioJob.file_name}</strong><small>{props.audioJob.error || props.audioJob.detail}{props.audioJob.duration_seconds ? ` · ${Math.max(1, Math.round(props.audioJob.duration_seconds / 60))} мин` : ''}</small>{props.audioJob.attachment?.transcript ? <details><summary>Показать текст</summary><p>{props.audioJob.attachment.transcript}</p></details> : null}</div>
+            <div><strong>{props.audioJob.file_name}</strong><small>{props.audioJob.error || props.audioJob.detail}{props.audioJob.duration_seconds ? ` · ${Math.max(1, Math.round(props.audioJob.duration_seconds / 60))} мин` : ''}</small>{props.audioJob.attachment?.transcript ? <details><summary>Показать текст</summary><p>{maskDemoText(props.audioJob.attachment.transcript, props.deal)}</p></details> : null}</div>
             <button type="button" aria-label="Убрать запись разговора" disabled={busy} onClick={props.onRemoveAudio}>×</button>
           </div> : null}
           <textarea ref={inputRef} value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder={view === 'companion' ? 'Как переписать: короче, без даты, клиент сам наберёт…' : 'Уточните рычаг, тон или что уже пробовали...'} aria-label={view === 'companion' ? 'Уточнение сопроводительного текста' : 'Уточнение рекомендации'} />
@@ -3546,7 +3547,7 @@ function ManagerDealContextView(props: {
     <section className="dc-manager-assistant-context-grid">
       <div><small>Этап</small><strong>{stage || 'Не указан'}</strong></div>
       <div><small>Текущая задача</small><strong>{currentTask || 'Нет открытой задачи'}</strong></div>
-      <div><small>Последняя коммуникация</small><strong>{lastCommunication ? `${dateTime(lastCommunication.occurred_at)} · ${lastCommunication.text}` : 'Нет доступных данных'}</strong>{lastCommunication?.channel && lastCommunication.event_id ? <CommunicationContent dealId={props.dealId} eventId={lastCommunication.event_id} channel={lastCommunication.channel} /> : null}</div>
+      <div><small>Последняя коммуникация</small><strong>{lastCommunication ? `${dateTime(lastCommunication.occurred_at)} · ${lastCommunication.text}` : 'Нет доступных данных'}</strong>{lastCommunication?.channel && lastCommunication.event_id ? <CommunicationContent dealId={props.dealId} eventId={lastCommunication.event_id} channel={lastCommunication.channel} mask={props.deal} /> : null}</div>
       <div><small>Главный риск</small><strong>{mainRisk || 'Не выделен'}</strong></div>
       <div><small>DISC клиента</small><strong>{discProfileLabel(props.discProfile)}</strong></div>
     </section>
@@ -3590,7 +3591,7 @@ function ManagerDealContextView(props: {
     {lastCommunication ? <section className="dc-deal-context-section">
       <h4>Последняя коммуникация</h4>
       <p className="dc-deal-context-note">{dateTime(lastCommunication.occurred_at)} · {lastCommunication.text}</p>
-      {lastCommunication.channel && lastCommunication.event_id ? <CommunicationContent dealId={props.dealId} eventId={lastCommunication.event_id} channel={lastCommunication.channel} /> : null}
+      {lastCommunication.channel && lastCommunication.event_id ? <CommunicationContent dealId={props.dealId} eventId={lastCommunication.event_id} channel={lastCommunication.channel} mask={props.deal} /> : null}
     </section> : null}
 
     <section className="dc-deal-context-truth">
@@ -3742,7 +3743,12 @@ function CompanionTextPanel({
         </button>
       </header>
       <p className="summary">Последний контакт: {companionContactLabel(lastContact)}</p>
-      {lastContact?.channel && lastContact.event_id ? <CommunicationContent dealId={dealId} eventId={lastContact.event_id} channel={lastContact.channel} /> : null}
+      {lastContact?.channel && lastContact.event_id ? <CommunicationContent dealId={dealId} eventId={lastContact.event_id} channel={lastContact.channel} mask={{
+        deal_id: dealId,
+        title: dealTitle,
+        manager_id: managerId,
+        manager_name: managerName,
+      }} /> : null}
       {running ? <ManagerJobProgress job={job || { status: 'running', detail: 'Обновляем данные из Bitrix', percent: 12 }} label="Сопроводительный текст" /> : null}
       {error && error !== 'Нет данных' ? <p className="dc-manager-error">{error}</p> : null}
       {message && visibleCompanion ? (

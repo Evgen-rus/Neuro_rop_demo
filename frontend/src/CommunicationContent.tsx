@@ -18,8 +18,29 @@ import {
   type CommunicationDialogTarget,
 } from './communicationDialog'
 import { CommunicationDialogContext, useCommunicationDialog } from './communicationDialogContext'
+import { isDemoPersonName, maskDemoText, type DemoMaskSource } from './demoDisplay'
 
 const TEXT_CHANNELS = new Set(['email', 'message', 'whatsapp', 'telegram', 'max'])
+
+function visibleDialogText(target: CommunicationDialogTarget | null, value?: string | null) {
+  return maskDemoText(value, target?.mask)
+}
+
+function visibleDialogTitle(target: CommunicationDialogTarget) {
+  const title = visibleDialogText(target, target.title).trim()
+  if (!title || isDemoPersonName(title)) return communicationContentLabel(target.channel)
+  return title
+}
+
+function visibleParticipantName(
+  target: CommunicationDialogTarget | null,
+  name?: string | null,
+  direction?: string | null,
+) {
+  const masked = visibleDialogText(target, name).trim()
+  if (masked && !isDemoPersonName(masked)) return masked
+  return direction === 'outgoing' ? 'Менеджер' : 'Клиент'
+}
 
 
 export function CommunicationDialogProvider({ children }: { children: ReactNode }) {
@@ -79,7 +100,7 @@ export function CommunicationDialogProvider({ children }: { children: ReactNode 
                   ? formatMoscowDateTime(state.target.occurredAt, { dateStyle: 'long', timeStyle: 'short' })
                   : `Сделка #${state.target.dealId}`}</small>
                 <h2 id="dc-communication-dialog-title">
-                  {state.target.title || communicationContentLabel(state.target.channel)}
+                  {visibleDialogTitle(state.target)}
                 </h2>
               </div>
               <button type="button" autoFocus onClick={closeCommunication} aria-label="Закрыть">×</button>
@@ -95,7 +116,7 @@ export function CommunicationDialogProvider({ children }: { children: ReactNode 
               {state.phase === 'error' ? <p className="error" role="alert">{state.error}</p> : null}
               {state.payload?.kind === 'transcript' ? (
                 <>
-                  <pre className="dc-communication-transcript">{state.payload.value.text}</pre>
+                  <pre className="dc-communication-transcript">{visibleDialogText(state.target, state.payload.value.text)}</pre>
                   {state.payload.value.truncated ? <small>Расшифровка показана не полностью.</small> : null}
                 </>
               ) : null}
@@ -111,14 +132,13 @@ export function CommunicationDialogProvider({ children }: { children: ReactNode 
                         className={`is-${message.direction === 'outgoing' ? 'outgoing' : 'incoming'}`}
                       >
                         <div>
-                          <strong>{message.participant_name
-                            || (message.direction === 'outgoing' ? 'Менеджер' : 'Клиент')}</strong>
+                          <strong>{visibleParticipantName(state.target, message.participant_name, message.direction)}</strong>
                           <time>{formatMoscowDateTime(message.occurred_at, {
                             hour: '2-digit',
                             minute: '2-digit',
                           })}</time>
                         </div>
-                        <p>{message.text}</p>
+                        <p>{visibleDialogText(state.target, message.text)}</p>
                         {message.is_excerpt ? <small>Показан доступный сохранённый фрагмент.</small> : null}
                         {message.truncated ? <small>Сообщение показано не полностью.</small> : null}
                       </li>
@@ -141,11 +161,13 @@ export function CommunicationContent({
   dealId,
   eventId,
   channel,
+  mask,
   allowLoad = true,
 }: {
   dealId: string
   eventId: string
   channel: string
+  mask?: DemoMaskSource | null
   allowLoad?: boolean
 }) {
   const normalizedChannel = channel.toLowerCase()
@@ -161,6 +183,7 @@ export function CommunicationContent({
         dealId,
         eventId,
         channel: normalizedChannel,
+        mask,
       })}
     >
       {communicationContentLabel(normalizedChannel)}

@@ -6,12 +6,15 @@ import {
   type DealCommunicationThread,
 } from './api'
 
+import type { DemoMaskSource } from './demoDisplay'
+
 export type CommunicationDialogTarget = {
   dealId: string
   eventId: string
   channel: string
   title?: string | null
   occurredAt?: string | null
+  mask?: DemoMaskSource | null
 }
 
 export function communicationContentLabel(channel: string) {
