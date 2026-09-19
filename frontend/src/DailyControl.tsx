@@ -16,6 +16,7 @@ import { copyTextToClipboard } from './contextPersist'
 import { formatMoscowDateTime } from './dateTime'
 import { DailyIcon, DealReviewCard } from './DealReviewCard'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
+import { displayDealTitle, maskDealTitleInText } from './demoDisplay'
 import { DealStatusIndicator } from './dealPresentation'
 import { businessReportWarnings, dailyTaskTotals, firstUnreviewedDeal, matchesDailySearch, hasReportDayWork, reportDayLabels, reportHeading, shouldOpenLatestReport, snapshotDayText, sortDailyReviewDeals } from './dailyControlView'
 import { TaskDayResults } from './TaskDayResults'
@@ -463,7 +464,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
 
   async function copyScript() {
     if (!selectedDeal) return
-    const script = String(selectedDeal.ai_context.manager_coaching || '').trim()
+    const script = maskDealTitleInText(String(selectedDeal.ai_context.manager_coaching || '').trim(), selectedDeal.deal_id, selectedDeal.title)
     if (!script) return
     const copied = await copyTextToClipboard(script)
     setCopyNotice(copied ? 'Сценарий скопирован' : 'Скопировать не удалось — выделите текст вручную')
@@ -739,14 +740,14 @@ function DealRow({
       </div>
       <div>
         <header>
-          <strong>{deal.title || `Сделка #${deal.deal_id}`}</strong>
+          <strong>{displayDealTitle(deal.deal_id, deal.title)}</strong>
           <b>{money(deal.amount, deal.currency_id || 'RUB')}</b>
         </header>
         <small className="dc-deal-pipeline-stage">{formatDealPipelineStage(deal)}</small>
         {dayLabels.length ? <div className="dc-daily-day-labels" aria-label="Почему сделка в отчёте и какая работа зафиксирована">
           {dayLabels.map((item) => <span className={item.kind} key={item.text}>{item.text}</span>)}
         </div> : null}
-        <p className={selected ? 'full' : 'clamp'}>{snapshotDayText(deal.attention_reason)}</p>
+        <p className={selected ? 'full' : 'clamp'}>{maskDealTitleInText(snapshotDayText(deal.attention_reason), deal.deal_id, deal.title)}</p>
         <footer>
           <span>{communications.unavailable ? 'Коммуникации недоступны' : `${communications.calls} звонков · ${communications.messages} сообщений за день среза${communications.conversation_duration_seconds != null ? ` · ${talkTime(communications.conversation_duration_seconds)} разговоров` : ''}`}</span>
           <a href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>Сделка #{deal.deal_id}</a>

@@ -1,5 +1,6 @@
 import type { DailyControlCreationKind, DailyControlDeal, DailyTaskResult } from './api'
 import { formatMoscowDateTime, moscowDateInputValue, parseMoscowDateTime } from './dateTime.ts'
+import { displayDealTitle, isDemoMode } from './demoDisplay.ts'
 
 export type DailyControlTimeFilter = 'all' | 'today' | 'tomorrow' | 'future'
 export const DEFAULT_TIME_FILTER: DailyControlTimeFilter = 'all'
@@ -276,6 +277,7 @@ export function dailyTaskTotals(deals: DailyControlDeal[]) {
 
 export function matchesDailySearch(deal: DailyControlDeal, search: string) {
   const needle = search.trim().toLocaleLowerCase('ru')
-  return !needle || [deal.deal_id, deal.title, ...(deal.task_results || []).map((task) => task.subject)]
-    .some((value) => String(value || '').toLocaleLowerCase('ru').includes(needle))
+  const fields = [deal.deal_id, deal.title, ...(deal.task_results || []).map((task) => task.subject)]
+  if (isDemoMode()) fields.push(displayDealTitle(deal.deal_id, deal.title))
+  return !needle || fields.some((value) => String(value || '').toLocaleLowerCase('ru').includes(needle))
 }

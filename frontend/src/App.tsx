@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import './index.css'
 import { DealControl } from './DealControl'
 import { formatMoscowDateTime, moscowDateInputValue } from './dateTime'
+import { displayDealTitle, isDemoMode, maskDealTitleInText } from './demoDisplay'
 import {
   asRecord,
   asString,
@@ -311,6 +312,20 @@ function formatMoneyText(value: string): string {
     /(?:\d{1,3}(?:[ \u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:RUB|руб(?:\.|лей|ля|ль)?|₽)/gi,
     (amount) => formatMoney(amount),
   )
+}
+
+function visibleCandidateHeading(item: {
+  entity_type: string
+  entity_id: string
+  title?: string | null
+  client_name?: string | null
+}) {
+  if (item.entity_type === 'deal') {
+    return isDemoMode()
+      ? displayDealTitle(item.entity_id, item.title)
+      : `Сделка ${item.entity_id} · ${item.client_name || item.title}`
+  }
+  return `Лид ${item.entity_id} · ${item.client_name || item.title}`
 }
 
 function parseManualInput(value: string, fallbackEntityType: ManualEntityType): ManualInput {
@@ -893,6 +908,7 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
           : 'Запустить анализ и получить поручение менеджеру',
         bitrix_url: selectedCandidate.bitrix_url || null,
         candidate_review: null,
+        entity_title: selectedCandidate.title,
       }
     }
     return null
@@ -1595,7 +1611,7 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
                       })} />
                       {checked ? 'В рабочем наборе' : 'Добавить из резерва'}
                     </label>
-                    <div className="daily-card-title"><span className={`risk-dot ${candidate.priority}`} /> <b>{candidate.title}</b></div>
+                    <div className="daily-card-title"><span className={`risk-dot ${candidate.priority}`} /> <b>{candidate.entity_type === 'deal' ? displayDealTitle(candidate.entity_id, candidate.title) : candidate.title}</b></div>
                     <div className="candidate-meta">{candidate.entity_type === 'lead' ? 'Лид' : 'Сделка'} {candidate.entity_id} · {candidate.status} · {(candidate.lifecycle || 'new') === 'new' ? 'новый случай' : candidate.lifecycle === 'reactivation' ? 'вернулся в контроль' : 'накопившийся случай'}</div>
                     {runResult ? <>
                       <p>{runResult.attention_reason || (runResult.has_analysis ? 'Анализ готов' : 'Контекст собран без нового анализа')}</p>
@@ -1603,7 +1619,7 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
                       {runResult.recommended_action ? <p>{runResult.recommended_action}</p> : null}
                       {runResult.report_id ? <button className="btn ghost" onClick={() => void openHistoryReport(Number(runResult.report_id))}>Открыть отчёт</button> : null}
                     </> : <>
-                      <p>{candidate.attention_reason}</p>
+                      <p>{candidate.entity_type === 'deal' ? maskDealTitleInText(candidate.attention_reason, candidate.entity_id, candidate.title) : candidate.attention_reason}</p>
                       <div className="reason-codes">{(candidate.reason_codes || []).map((code) => <span key={code}>{code}</span>)}</div>
                       <div className="candidate-meta">Анализ: {candidate.analysis_freshness || 'missing'} · звонки: {asString(candidate.call_method?.attempts, '0')} · входящие: {asString(candidate.call_method?.incoming, '0')} · исходящие: {asString(candidate.call_method?.outgoing, '0')}</div>
                       {progress && checked && dailyRun?.status !== 'draft' ? <EntityProgressView progress={progress} /> : candidate.entity_type === 'lead' ? <LeadQualificationStrip summary={candidate.lead_qualification} hasAnalysis={Boolean(candidate.lead_analysis_available || candidate.analyzed)} category={candidate.lead_category} /> : null}
@@ -1856,7 +1872,7 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
                 <button className="deal-select" onClick={() => setSelectedCandidate(item)}>
                   <span className="deal-title-row">
                     <strong>
-                      {item.entity_type === 'deal' ? 'Сделка' : 'Лид'} {item.entity_id} · {item.client_name || item.title}
+                      {visibleCandidateHeading(item)}
                     </strong>
                     {item.analyzed ? <span className="analysis-marker">Есть анализ</span> : null}
                     {item.review_state === 'reviewed' || item.review_state === 'snoozed' ? (
@@ -1870,7 +1886,7 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
                     {formatMoneyText(item.status)}
                     {item.amount ? ` · ${formatMoney(item.amount)}` : ''}
                     <br />
-                    {formatMoneyText(item.attention_reason)}
+                    {formatMoneyText(item.entity_type === 'deal' ? maskDealTitleInText(item.attention_reason, item.entity_id, item.title) : item.attention_reason)}
                     {item.crm_updated_after_review ? <><br />CRM обновлена после решения РОПа</> : null}
                   </small>
                   {item.entity_type === 'lead' ? <LeadQualificationStrip summary={item.lead_qualification} hasAnalysis={Boolean(item.lead_analysis_available || item.analyzed)} category={item.lead_category} /> : null}
@@ -2249,6 +2265,7 @@ type ReportPanelsProps = {
     recommended_action?: string | null
     bitrix_url?: string | null
     candidate_review?: Record<string, unknown> | null
+    entity_title?: string | null
   } | null
   reportDetail?: UiReportDetail | null
   leadWorkspaceOpen: boolean
@@ -2711,6 +2728,11 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const { meta, analysis, facts, unknowns, closureReasons, internalChecks, recommendations, managerBrief, readOnly } = props
   const isLead = meta?.entity_type === 'lead'
   const dealState = asRecord(analysis?.deal_state)
+  const realDealTitle = asString(dealState.title) || meta?.entity_title || ''
+  function visibleDealCopy(text: string) {
+    if (meta?.entity_type !== 'deal') return text
+    return maskDealTitleInText(text, meta.entity_id, realDealTitle)
+  }
   const leadState = asRecord(analysis?.lead_state)
   const mainRisk = asRecord(analysis?.main_risk)
   const loss = asRecord(analysis?.loss_diagnosis)
@@ -3163,7 +3185,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
           <h2>Факты</h2>
           <ul className="facts good">
             {facts.map((item) => (
-              <li key={item}>{item}</li>
+              <li key={item}>{visibleDealCopy(item)}</li>
             ))}
             {!facts.length && <li className="muted">Пока нет фактов</li>}
           </ul>
@@ -3194,7 +3216,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
         <h2>Как принять решение</h2>
         <ul className="facts bad">
           {recommendations.map((item) => (
-            <li key={item}>{item}</li>
+            <li key={item}>{visibleDealCopy(item)}</li>
           ))}
           {!recommendations.length && <li className="muted">Нет рекомендации</li>}
         </ul>
@@ -3224,7 +3246,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
         <button className="btn secondary" onClick={props.onToggleMarkdown} disabled={!meta?.report_id}>
           {props.showMarkdown ? 'Скрыть полный отчёт' : 'Показать полный отчёт'}
         </button>
-        {props.showMarkdown && props.markdown && <div className="markdown">{formatMoneyText(props.markdown)}</div>}
+        {props.showMarkdown && props.markdown && <div className="markdown">{formatMoneyText(visibleDealCopy(props.markdown))}</div>}
       </section> : null}
     </>
   )

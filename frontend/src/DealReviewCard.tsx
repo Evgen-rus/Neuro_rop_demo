@@ -4,6 +4,7 @@ import type { DailyControlDeal, DealControlCommunicationItem, DealControlCommuni
 import { useCommunicationDialog } from './communicationDialogContext'
 import { formatMoscowDateTime } from './dateTime'
 import { formatDealPipelineStage } from './dealDisplay'
+import { displayDealTitle, maskDealTitleInText, maskDealTitleInValue } from './demoDisplay'
 import { dailyQualityCaption, snapshotDayText } from './dailyControlView'
 
 const QUALITY_LABELS = {
@@ -14,6 +15,10 @@ const QUALITY_LABELS = {
 
 const NO_DATA = 'Нет данных'
 const DEFAULT_SCRIPT_HINT = 'Формулировки для разговора с менеджером на планёрке'
+
+function visibleDealText(deal: { deal_id: string; title?: string | null }, value?: string | null) {
+  return maskDealTitleInText(value, deal.deal_id, deal.title)
+}
 const FOCUS_STATUS_SYMBOL = {
   red: '!',
   yellow: '?',
@@ -347,8 +352,8 @@ function QualityCriterionIcon({
 }
 
 function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDeal; snapshotDay?: boolean }) {
-  const quality = deal.quality
-  const qualityCaption = dailyQualityCaption(quality, snapshotDay)
+  const quality = maskDealTitleInValue(deal.quality, deal.deal_id, deal.title)
+  const qualityCaption = visibleDealText(deal, dailyQualityCaption(quality, snapshotDay))
   const hasScores = Object.values(quality.criteria).some((item) => item.score != null)
   const tipId = useId()
   const [pinned, setPinned] = useState<keyof typeof QUALITY_LABELS | null>(null)
@@ -452,7 +457,7 @@ function DealFocusBlock(props: {
           <span className="dc-daily-focus-icon" aria-hidden="true">{FOCUS_STATUS_SYMBOL[deal.status]}</span>
           <div>
             <small>Вывод для РОПа</small>
-            <p>{humanQualityText(deal.summary_for_rop || deal.quality.insufficient_reason, props.snapshotDay) || NO_DATA}</p>
+            <p>{visibleDealText(deal, humanQualityText(deal.summary_for_rop || deal.quality.insufficient_reason, props.snapshotDay)) || NO_DATA}</p>
           </div>
         </div>
         <div className="dc-daily-focus-step question">
@@ -461,11 +466,11 @@ function DealFocusBlock(props: {
             <small>Спросить менеджера</small>
             <label className={props.asked[0] ? 'done' : ''}>
               <input type="checkbox" checked={props.asked[0]} onChange={() => props.onToggleAsked(0)} />
-              <span>{deal.generic_question}</span>
+              <span>{visibleDealText(deal, deal.generic_question)}</span>
             </label>
             <label className={props.asked[1] ? 'done' : ''}>
               <input type="checkbox" checked={props.asked[1]} onChange={() => props.onToggleAsked(1)} />
-              <span>{deal.direct_question}</span>
+              <span>{visibleDealText(deal, deal.direct_question)}</span>
             </label>
           </div>
         </div>
@@ -516,7 +521,7 @@ export function DealReviewCard(props: {
       {props.showHeader !== false ? (
         <header className="dc-daily-card-head">
           <div>
-            <h2>{deal.title || `Сделка #${deal.deal_id}`}</h2>
+            <h2>{displayDealTitle(deal.deal_id, deal.title)}</h2>
             <p>#{deal.deal_id} · {money(deal.amount, deal.currency_id || 'RUB')} · {formatDealPipelineStage(deal)}</p>
           </div>
           <span className={`dc-daily-pill ${deal.status}`}>{deal.status_label}</span>
@@ -524,7 +529,7 @@ export function DealReviewCard(props: {
       ) : null}
 
       <DealSituation
-        situation={deal.ai_context.current_situation}
+        situation={visibleDealText(deal, deal.ai_context.current_situation)}
         mode={props.snapshotDay ? 'snapshot' : 'live'}
         cutoffAt={props.snapshotCutoffAt || deal.day_scope?.cutoff_at}
       />
@@ -537,7 +542,7 @@ export function DealReviewCard(props: {
             <span className="dc-daily-ico"><DailyIcon name="phone" /></span>
             <h3>{props.snapshotDay ? 'Коммуникации за этот день' : 'Коммуникации за сегодня'}</h3>
           </span>
-          <small>Сделка #{deal.deal_id} · {deal.title || NO_DATA}</small>
+          <small>Сделка #{deal.deal_id} · {displayDealTitle(deal.deal_id, deal.title, NO_DATA)}</small>
         </header>
         {communications.unavailable ? (
           <p className="dc-daily-block-note">Данные коммуникаций недоступны. Это не нулевая активность.</p>
@@ -650,11 +655,11 @@ export function DealReviewCard(props: {
             </span>
           </summary>
           <div className="dc-daily-tile-body">
-            {deal.ai_context.rop_focus ? <p><b>Фокус РОПа.</b> {deal.ai_context.rop_focus}</p> : null}
-            {deal.ai_context.what_to_check_now ? <p><b>Проверить сейчас.</b> {deal.ai_context.what_to_check_now}</p> : null}
-            {deal.ai_context.manager_coaching ? <p><b>Сообщение менеджеру.</b> {deal.ai_context.manager_coaching}</p> : null}
-            {deal.ai_context.known.length ? <ul>{deal.ai_context.known.map((item) => <li key={item}>{item}</li>)}</ul> : null}
-            {deal.ai_context.unknowns.length ? <p><b>Неизвестно:</b> {deal.ai_context.unknowns.join('; ')}</p> : null}
+            {deal.ai_context.rop_focus ? <p><b>Фокус РОПа.</b> {visibleDealText(deal, deal.ai_context.rop_focus)}</p> : null}
+            {deal.ai_context.what_to_check_now ? <p><b>Проверить сейчас.</b> {visibleDealText(deal, deal.ai_context.what_to_check_now)}</p> : null}
+            {deal.ai_context.manager_coaching ? <p><b>Сообщение менеджеру.</b> {visibleDealText(deal, deal.ai_context.manager_coaching)}</p> : null}
+            {deal.ai_context.known.length ? <ul>{deal.ai_context.known.map((item) => <li key={item}>{visibleDealText(deal, item)}</li>)}</ul> : null}
+            {deal.ai_context.unknowns.length ? <p><b>Неизвестно:</b> {visibleDealText(deal, deal.ai_context.unknowns.join('; '))}</p> : null}
           </div>
         </details>
         <details className="dc-daily-tile tone-script">
@@ -666,7 +671,7 @@ export function DealReviewCard(props: {
             </span>
           </summary>
           <div className="dc-daily-tile-body">
-            {script ? <pre>{script}</pre> : <p>{NO_DATA}</p>}
+            {script ? <pre>{visibleDealText(deal, script)}</pre> : <p>{NO_DATA}</p>}
             {script ? <button type="button" className="dc-button" onClick={props.onCopyScript}>Скопировать сценарий</button> : null}
             {props.copyNotice ? <small>{props.copyNotice}</small> : null}
           </div>

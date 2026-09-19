@@ -7,6 +7,7 @@ import {
   type AutomaticAnalysisLatest,
 } from './automaticAnalysis'
 import { formatMoscowDateTime } from './dateTime'
+import { displayDealTitle, maskDealTitleInText } from './demoDisplay'
 
 export function AutomaticAnalysisPanel({ snapshot, role }: {
   snapshot: AutomaticAnalysisLatest | null
@@ -14,7 +15,12 @@ export function AutomaticAnalysisPanel({ snapshot, role }: {
 }) {
   if (!snapshot || !canViewAutomaticAnalysis(role)) return null
   const current = automaticAnalysisCurrentText(snapshot)
-  const stage = current ? null : automaticAnalysisStageLabel(snapshot.current_stage)
+  const currentTitle = String(snapshot.current?.title || '').trim()
+  const currentDealId = (snapshot.details || []).find((item) => item.title === currentTitle)?.deal_id
+  const visibleCurrent = current
+    ? maskDealTitleInText(current, currentDealId, currentTitle)
+    : null
+  const stage = visibleCurrent ? null : automaticAnalysisStageLabel(snapshot.current_stage)
   const updated = snapshot.updated_at || snapshot.started_at
   const details = snapshot.details || []
   return (
@@ -25,7 +31,7 @@ export function AutomaticAnalysisPanel({ snapshot, role }: {
             {snapshot.status === 'running' ? <span className="dc-spinner" /> : null}
             {automaticAnalysisStatusLabel(snapshot.status)}
           </strong>
-          {current ? <span className="dc-auto-analysis-current">{current}</span> : null}
+          {visibleCurrent ? <span className="dc-auto-analysis-current">{visibleCurrent}</span> : null}
           <small>
             {automaticAnalysisCountersText(snapshot)}
             {stage ? ` · этап: ${stage}` : ''}
@@ -43,7 +49,7 @@ export function AutomaticAnalysisPanel({ snapshot, role }: {
                 <strong>
                   {item.decision === 'full' ? 'FULL' : 'MINI'}
                   {item.incremental ? ' (инкрементальный LLM-анализ)' : ''}
-                  {` · #${item.deal_id} · ${item.title}`}
+                  {` · #${item.deal_id} · ${displayDealTitle(item.deal_id, item.title)}`}
                 </strong>
                 <ul>{item.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>
               </li>

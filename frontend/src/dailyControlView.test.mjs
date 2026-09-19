@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import ts from 'typescript'
 import { dailyQualityCaption, snapshotDayText } from './dailyControlView.ts'
 import { businessReportWarnings, canFilterReport, communicationDayLabels, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, firstUnreviewedDeal, matchesDailySearch, reportDayLabels, reportHeading, shouldOpenLatestReport, sortDailyReviewDeals, sortDayTasks, taskDeadlineLabel, taskStripStatus, tasksStripSummary } from './dailyControlView.ts'
+import { setDemoMode } from './demoDisplay.ts'
 
 const deals = ['today', 'overdue', 'missing', 'tomorrow', 'future', 'unscheduled'].map((bucket, index) => ({
   deal_id: String(index), manager_id: '1', status: index === 3 ? 'red' : 'yellow', bitrix_task_time_bucket: bucket,
@@ -85,6 +86,19 @@ test('a task moved to tomorrow still belongs to today and search looks inside th
   assert.equal(matchesDailySearch(deal, '101'), false)
   assert.equal(matchesDailySearch(deal, 'поставка'), true)
   assert.equal(matchesDailySearch(deal, 'согласовать'), true)
+})
+
+test('DEMO_MODE search finds the display label without changing production matching', () => {
+  const deal = { ...deals[3], title: 'Поставка линии' }
+  assert.equal(matchesDailySearch(deal, 'сделка 3'), false)
+  setDemoMode(true)
+  try {
+    assert.equal(matchesDailySearch(deal, 'сделка 3'), true)
+    assert.equal(matchesDailySearch(deal, 'поставка'), true)
+  } finally {
+    setDemoMode(false)
+  }
+  assert.equal(matchesDailySearch(deal, 'сделка 3'), false)
 })
 
 test('untouched obligation stays in the report without a separate badge', () => {

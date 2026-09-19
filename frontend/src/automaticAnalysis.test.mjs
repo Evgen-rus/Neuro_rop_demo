@@ -16,6 +16,7 @@ import {
   automaticAnalysisRefreshPlan,
   shouldReloadAfterReportsPublished,
 } from './automaticAnalysis.ts'
+import { setDemoMode } from './demoDisplay.ts'
 
 test('only admin can view the automatic packet', () => {
   for (const role of ['admin', 'rop', 'manager', '']) {
@@ -55,6 +56,19 @@ test('actual panel is collapsed initially and contains full/mini details for adm
   assert.match(html, /MINI · #202 · Тестовая MINI/)
   assert.match(html, /Просрочена открытая задача/)
   assert.match(html, /обновлено 28\.08, 10:15/)
+})
+
+test('DEMO_MODE hides stored deal titles in the automatic packet panel', () => {
+  setDemoMode(true)
+  try {
+    const html = renderToStaticMarkup(createElement(AutomaticAnalysisPanel, { snapshot: packet, role: 'admin' }))
+    assert.match(html, /FULL \(инкрементальный LLM-анализ\) · #101 · Сделка 101/)
+    assert.match(html, /MINI · #202 · Сделка 202/)
+    assert.doesNotMatch(html, /Тестовая сделка/)
+    assert.doesNotMatch(html, /Тестовая MINI/)
+  } finally {
+    setDemoMode(false)
+  }
 })
 
 test('actual panel renders nothing for rop and manager, even if details were supplied', () => {

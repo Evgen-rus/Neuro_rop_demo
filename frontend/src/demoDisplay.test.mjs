@@ -1,0 +1,70 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import {
+  demoDealTitle,
+  displayDealTitle,
+  displayEntityTitle,
+  isDemoMode,
+  maskDealTitleInText,
+  maskDealTitleInValue,
+  setDemoMode,
+} from './demoDisplay.ts'
+
+const REAL_TITLE = 'ООО Ромашка / линия розлива'
+const DEAL_ID = '18735'
+
+function withDemoMode(enabled, fn) {
+  const previous = isDemoMode()
+  setDemoMode(enabled)
+  try {
+    fn()
+  } finally {
+    setDemoMode(previous)
+  }
+}
+
+test('DEMO_MODE shows Сделка {deal_id} and leaves production titles unchanged', () => {
+  withDemoMode(false, () => {
+    assert.equal(displayDealTitle(DEAL_ID, REAL_TITLE), REAL_TITLE)
+    assert.equal(displayDealTitle(DEAL_ID, ''), `Сделка #${DEAL_ID}`)
+    assert.equal(displayDealTitle(DEAL_ID, '   ', ''), '')
+    assert.equal(displayEntityTitle('deal', DEAL_ID, REAL_TITLE), REAL_TITLE)
+    assert.equal(displayEntityTitle('lead', '88', 'Лид Ромашка'), 'Лид Ромашка')
+  })
+
+  withDemoMode(true, () => {
+    assert.equal(demoDealTitle(DEAL_ID), 'Сделка 18735')
+    assert.equal(displayDealTitle(DEAL_ID, REAL_TITLE), 'Сделка 18735')
+    assert.equal(displayDealTitle(DEAL_ID, ''), 'Сделка 18735')
+    assert.equal(displayDealTitle(DEAL_ID, REAL_TITLE, REAL_TITLE), 'Сделка 18735')
+    assert.equal(displayEntityTitle('deal', DEAL_ID, REAL_TITLE), 'Сделка 18735')
+    assert.equal(displayEntityTitle('lead', '88', 'Лид Ромашка'), 'Лид Ромашка')
+  })
+})
+
+test('DEMO_MODE replaces the exact current deal.title in rendered text only', () => {
+  const markdown = `# ${REAL_TITLE}\n\nРекомендация: позвонить по ${REAL_TITLE}.\nСоседняя сделка ООО Ромашка остаётся.`
+  withDemoMode(false, () => {
+    assert.equal(maskDealTitleInText(markdown, DEAL_ID, REAL_TITLE), markdown)
+    assert.deepEqual(
+      maskDealTitleInValue({ title: REAL_TITLE, deal_id: DEAL_ID }, DEAL_ID, REAL_TITLE),
+      { title: REAL_TITLE, deal_id: DEAL_ID },
+    )
+  })
+
+  withDemoMode(true, () => {
+    assert.equal(
+      maskDealTitleInText(markdown, DEAL_ID, REAL_TITLE),
+      '# Сделка 18735\n\nРекомендация: позвонить по Сделка 18735.\nСоседняя сделка ООО Ромашка остаётся.',
+    )
+    assert.equal(maskDealTitleInText(markdown, DEAL_ID, ''), markdown)
+    const masked = maskDealTitleInValue(
+      { title: REAL_TITLE, deal_id: DEAL_ID, note: `Контекст ${REAL_TITLE}` },
+      DEAL_ID,
+      REAL_TITLE,
+    )
+    assert.equal(masked.title, 'Сделка 18735')
+    assert.equal(masked.deal_id, DEAL_ID)
+    assert.equal(masked.note, 'Контекст Сделка 18735')
+  })
+})
