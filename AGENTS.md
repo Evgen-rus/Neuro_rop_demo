@@ -1,6 +1,6 @@
-# Агент: Neuro ROP Assistant
+# Агент: Neuro ROP Demo
 
-CLI + FastAPI + React для анализа лидов/сделок Bitrix24; CRM только на чтение.
+CLI + FastAPI + React — демо-версия Neuro ROP для анализа лидов/сделок Bitrix24; CRM только на чтение. Это не production-продукт.
 
 ## Контекст и карта
 

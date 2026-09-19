@@ -4,7 +4,7 @@ import type { DailyControlDeal, DealControlCommunicationItem, DealControlCommuni
 import { useCommunicationDialog } from './communicationDialogContext'
 import { formatMoscowDateTime } from './dateTime'
 import { formatDealPipelineStage } from './dealDisplay'
-import { displayDealTitle, maskDealTitleInText, maskDealTitleInValue } from './demoDisplay'
+import { displayDealTitle, maskDemoText, maskDemoValue } from './demoDisplay'
 import { dailyQualityCaption, snapshotDayText } from './dailyControlView'
 
 const QUALITY_LABELS = {
@@ -16,8 +16,8 @@ const QUALITY_LABELS = {
 const NO_DATA = 'Нет данных'
 const DEFAULT_SCRIPT_HINT = 'Формулировки для разговора с менеджером на планёрке'
 
-function visibleDealText(deal: { deal_id: string; title?: string | null }, value?: string | null) {
-  return maskDealTitleInText(value, deal.deal_id, deal.title)
+function visibleDealText(deal: { deal_id: string; title?: string | null; manager_id?: string | null; manager_name?: string | null }, value?: string | null) {
+  return maskDemoText(value, deal)
 }
 const FOCUS_STATUS_SYMBOL = {
   red: '!',
@@ -352,7 +352,7 @@ function QualityCriterionIcon({
 }
 
 function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDeal; snapshotDay?: boolean }) {
-  const quality = maskDealTitleInValue(deal.quality, deal.deal_id, deal.title)
+  const quality = maskDemoValue(deal.quality, deal)
   const qualityCaption = visibleDealText(deal, dailyQualityCaption(quality, snapshotDay))
   const hasScores = Object.values(quality.criteria).some((item) => item.score != null)
   const tipId = useId()

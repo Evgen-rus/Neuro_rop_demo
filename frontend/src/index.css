@@ -1619,6 +1619,15 @@ textarea {
   text-decoration: none;
 }
 
+span.dc-bitrix-detail-link {
+  cursor: default;
+}
+
+span.dc-bitrix-detail-link:hover {
+  transform: none;
+  box-shadow: none;
+}
+
 .dc-analyze-button {
   min-height: 34px;
   padding: 6px 10px;
@@ -2979,6 +2988,10 @@ textarea {
   line-height: 1.2;
   text-decoration: none;
   white-space: nowrap;
+  cursor: default;
+}
+
+a.dc-deal-id {
   cursor: pointer;
 }
 

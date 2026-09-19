@@ -2,11 +2,15 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   demoDealTitle,
+  demoManagerName,
   displayDealTitle,
   displayEntityTitle,
+  displayManagerName,
   isDemoMode,
   maskDealTitleInText,
   maskDealTitleInValue,
+  maskDemoText,
+  maskManagerNameInText,
   setDemoMode,
 } from './demoDisplay.ts'
 
@@ -66,5 +70,47 @@ test('DEMO_MODE replaces the exact current deal.title in rendered text only', ()
     assert.equal(masked.title, 'Сделка 18735')
     assert.equal(masked.deal_id, DEAL_ID)
     assert.equal(masked.note, 'Контекст Сделка 18735')
+  })
+})
+
+const REAL_MANAGER = 'Иванов Иван'
+const MANAGER_ID = '42'
+
+test('DEMO_MODE shows Менеджер {manager_id} and leaves production names unchanged', () => {
+  withDemoMode(false, () => {
+    assert.equal(displayManagerName(MANAGER_ID, REAL_MANAGER), REAL_MANAGER)
+    assert.equal(displayManagerName(MANAGER_ID, ''), `Ответственный #${MANAGER_ID}`)
+    assert.equal(displayManagerName(MANAGER_ID, '   ', 'Не назначен'), 'Не назначен')
+  })
+
+  withDemoMode(true, () => {
+    assert.equal(demoManagerName(MANAGER_ID), 'Менеджер 42')
+    assert.equal(displayManagerName(MANAGER_ID, REAL_MANAGER), 'Менеджер 42')
+    assert.equal(displayManagerName(MANAGER_ID, ''), 'Менеджер 42')
+    assert.equal(displayManagerName('', REAL_MANAGER), 'Менеджер')
+  })
+})
+
+test('DEMO_MODE replaces the exact current manager_name in rendered text only', () => {
+  const markdown = `${REAL_MANAGER} ведёт ${REAL_TITLE}. Коллега Иванов остаётся.`
+  withDemoMode(false, () => {
+    assert.equal(maskManagerNameInText(markdown, MANAGER_ID, REAL_MANAGER), markdown)
+    assert.equal(maskDemoText(markdown, {
+      deal_id: DEAL_ID, title: REAL_TITLE, manager_id: MANAGER_ID, manager_name: REAL_MANAGER,
+    }), markdown)
+  })
+
+  withDemoMode(true, () => {
+    assert.equal(
+      maskManagerNameInText(markdown, MANAGER_ID, REAL_MANAGER),
+      'Менеджер 42 ведёт ООО Ромашка / линия розлива. Коллега Иванов остаётся.',
+    )
+    assert.equal(
+      maskDemoText(markdown, {
+        deal_id: DEAL_ID, title: REAL_TITLE, manager_id: MANAGER_ID, manager_name: REAL_MANAGER,
+      }),
+      'Менеджер 42 ведёт Сделка 18735. Коллега Иванов остаётся.',
+    )
+    assert.equal(maskManagerNameInText(markdown, MANAGER_ID, ''), markdown)
   })
 })

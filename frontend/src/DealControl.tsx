@@ -122,8 +122,8 @@ import {
   visibleManagerWorklogs,
 } from './managerWorklogs'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
-import { displayDealTitle, isDemoMode, maskDealTitleInText, maskDealTitleInValue } from './demoDisplay'
-import { BitrixDealIdLink, DealStatusIndicator } from './dealPresentation'
+import { displayDealTitle, displayManagerName, isDemoMode, maskDemoText, maskDemoValue } from './demoDisplay'
+import { BitrixDealIdLink, BitrixDealLink, DealStatusIndicator } from './dealPresentation'
 import { PromptLabWorkspace } from './PromptLab'
 import { CallScriptResultView, CompanionResultView, EmailScriptResultView, FollowupsResultView, QuickHelpResultView } from './managerResults'
 import {
@@ -703,7 +703,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const managers = useMemo(() => {
     const values = new Map<string, string>()
     data?.deals.forEach((deal) => {
-      if (deal.manager_id) values.set(deal.manager_id, deal.manager_name || `Ответственный #${deal.manager_id}`)
+      if (deal.manager_id) values.set(deal.manager_id, displayManagerName(deal.manager_id, deal.manager_name, `Ответственный #${deal.manager_id}`))
     })
     return [...values.entries()].sort((a, b) => a[1].localeCompare(b[1], 'ru'))
   }, [data])
@@ -729,8 +729,10 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         if (!needle) return true
         const bitrixText = (deal.bitrix_tasks || []).map((item) => item.subject).join(' ')
         const haystack = `${deal.title || ''} ${deal.deal_id} ${deal.manager_name || ''} ${bitrixText}`
-        const demoTitle = isDemoMode() ? ` ${displayDealTitle(deal.deal_id, deal.title)}` : ''
-        return `${haystack}${demoTitle}`
+        const demoLabels = isDemoMode()
+          ? ` ${displayDealTitle(deal.deal_id, deal.title)} ${displayManagerName(deal.manager_id, deal.manager_name)}`
+          : ''
+        return `${haystack}${demoLabels}`
           .toLocaleLowerCase('ru')
           .includes(needle)
       })
@@ -891,9 +893,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       return
     }
     try {
-      const visible = selected
-        ? maskDealTitleInText(text, selected.deal_id, selected.title)
-        : text
+      const visible = selected ? maskDemoText(text, selected) : text
       await navigator.clipboard.writeText(visible)
       setNotice(`${label} скопирован. В Bitrix его нужно перенести вручную.`)
     } catch {
@@ -1261,7 +1261,7 @@ function DealTable(props: {
           <div className="dc-stage-cell">
             <span className="dc-stage-pill" title={stageLabel}><span>{stageLabel}</span></span>
             <div className="dc-stage-meta-group">
-              <span className="dc-stage-meta">♟ {deal.manager_name || 'Не назначен'}</span>
+              <span className="dc-stage-meta">♟ {displayManagerName(deal.manager_id, deal.manager_name, 'Не назначен')}</span>
             </div>
           </div>
           <div className="dc-forecast-cell" onClick={(event) => event.stopPropagation()}><div className="dc-cell-card"><small>Сумма договора</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong><div>
@@ -1371,7 +1371,7 @@ function TaskTable({
           </div>
           <div className="dc-plan-deal-cell">
             <strong>{displayDealTitle(deal.deal_id, deal.title)}</strong>
-            <small>♟ {deal.manager_name || 'Ответственный не указан'}</small>
+            <small>♟ {displayManagerName(deal.manager_id, deal.manager_name, 'Ответственный не указан')}</small>
             <BitrixDealIdLink dealId={deal.deal_id} />
           </div>
           <div className="dc-manager-comments-cell">
@@ -1556,7 +1556,7 @@ function DealCommentsModal({
     <div className="dc-comments-modal" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
       <section className="dc-comments-dialog" role="dialog" aria-modal="true" aria-label={`Комментарии и контроль сделки #${deal.deal_id}`}>
         <header className="dc-comments-modal-head">
-          <div className="dc-comments-modal-title"><strong>Комментарии и контроль · #{deal.deal_id}</strong><small>{displayDealTitle(deal.deal_id, deal.title)} · {deal.manager_name || 'Ответственный не указан'}</small></div>
+          <div className="dc-comments-modal-title"><strong>Комментарии и контроль · #{deal.deal_id}</strong><small>{displayDealTitle(deal.deal_id, deal.title)} · {displayManagerName(deal.manager_id, deal.manager_name, 'Ответственный не указан')}</small></div>
           <button type="button" className="dc-comments-close" aria-label="Закрыть" onClick={onClose}>×</button>
         </header>
         <div className={`dc-comments-modal-body ${resizing ? 'resizing' : ''}`} ref={bodyRef} style={{ '--comments-left': `${leftPercent}%` } as CSSProperties}>
@@ -2164,20 +2164,16 @@ function DealDetail(props: {
       <div className="dc-detail-heading">
         <div className="dc-deal-title-row">
           <h2>Сделка</h2>
-          <a
+          <BitrixDealLink
             className="dc-button primary dc-bitrix-detail-link"
-            href={bitrixDealUrl(deal.deal_id)}
-            target="_blank"
-            rel="noreferrer"
-            aria-label={`Открыть сделку #${deal.deal_id} в Bitrix`}
-            title="Открыть в Bitrix"
+            dealId={deal.deal_id}
           >
             #{deal.deal_id}
-          </a>
+          </BitrixDealLink>
           <section className="dc-detail-stats dc-detail-stats-compact" aria-label="Основные данные сделки">
             <div className="dc-detail-stat-grow" title={`Воронка и этап: ${formatDealPipelineStage(deal)}`} aria-label={`Воронка и этап: ${formatDealPipelineStage(deal)}`}><span aria-hidden="true">◆</span><strong>{formatDealPipelineStage(deal)}</strong></div>
             <div className="dc-detail-stat-fixed" title={`Вероятность: ${deal.probability == null ? 'не указана' : `${deal.probability}%`}`} aria-label={`Вероятность: ${deal.probability == null ? 'не указана' : `${deal.probability}%`}`}><span aria-hidden="true">◔</span><strong>{deal.probability == null ? '—' : `${deal.probability}%`}</strong></div>
-            <div className="dc-detail-stat-grow" title={`Менеджер: ${deal.manager_name || 'не указан'}`} aria-label={`Менеджер: ${deal.manager_name || 'не указан'}`}><span aria-hidden="true">●</span><strong>{deal.manager_name || '—'}</strong></div>
+            <div className="dc-detail-stat-grow" title={`Менеджер: ${displayManagerName(deal.manager_id, deal.manager_name, 'не указан')}`} aria-label={`Менеджер: ${displayManagerName(deal.manager_id, deal.manager_name, 'не указан')}`}><span aria-hidden="true">●</span><strong>{displayManagerName(deal.manager_id, deal.manager_name, '—')}</strong></div>
             <div className="dc-detail-stat-fixed" title={`Сумма: ${money(deal.amount, deal.currency_id || 'RUB')}`} aria-label={`Сумма: ${money(deal.amount, deal.currency_id || 'RUB')}`}><span aria-hidden="true">₽</span><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong></div>
           </section>
         </div>
@@ -2241,7 +2237,7 @@ function DealDetail(props: {
       onCopyScript={() => void copyReviewScript()}
       copyNotice={scriptCopyNotice}
     />}
-    <DealMarkdownReport reportId={coaching.report_id} dealId={deal.deal_id} dealTitle={deal.title} userRole={props.userRole} onCopy={props.onCopy} />
+    <DealMarkdownReport reportId={coaching.report_id} dealId={deal.deal_id} dealTitle={deal.title} managerId={deal.manager_id} managerName={deal.manager_name} userRole={props.userRole} onCopy={props.onCopy} />
   </aside>
 }
 
@@ -2435,7 +2431,7 @@ function ManagerSituationActions(props: {
       </header>
 
       <div className="dc-manager-situation-body">
-        <p className="dc-manager-situation-copy">{maskDealTitleInText(props.deal.coaching.current_situation, props.deal.deal_id, props.deal.title) || 'Текущая ситуация пока не сформирована.'}</p>
+        <p className="dc-manager-situation-copy">{maskDemoText(props.deal.coaching.current_situation, props.deal) || 'Текущая ситуация пока не сформирована.'}</p>
         {props.job ? <ManagerJobProgress job={props.job} label="Пересборка ситуации" /> : null}
         {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
       </div>
@@ -2553,8 +2549,8 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, mode, onCopy, onEdit, on
   onBitrix: () => void
   onRevealFinished?: () => void
 }) {
-  const content: ManagerQuickHelpContent = maskDealTitleInValue(entry.content, deal.deal_id, deal.title)
-  const displayEntry = { ...entry, content, question: maskDealTitleInText(entry.question, deal.deal_id, deal.title) }
+  const content: ManagerQuickHelpContent = maskDemoValue(entry.content, deal)
+  const displayEntry = { ...entry, content, question: maskDemoText(entry.question, deal) }
   const [selectedStrategy, setSelectedStrategy] = useState<ManagerQuickHelpStrategy>('primary')
   const [fullScriptOpen, setFullScriptOpen] = useState(false)
   const [fullScriptMode, setFullScriptMode] = useState<ManagerFullScriptMode>('message')
@@ -2755,7 +2751,7 @@ function ManagerFullScriptModal(props: {
       document.removeEventListener('keydown', onKeyDown)
     }
   }, [onClose])
-  const workspace = maskDealTitleInValue(props.workspace, props.deal.deal_id, props.deal.title)
+  const workspace = maskDemoValue(props.workspace, props.deal)
   const script = workspace?.script?.content
   const objections = workspace?.objection_handling?.items || []
   const failed = props.job?.status === 'error' || Boolean(props.error)
@@ -3077,7 +3073,8 @@ function ManagerAssistantModal(props: {
 
   async function prepareBitrixComment(entry: ManagerQuickHelpEntry) {
     await props.onCopy(bitrixComment(entry), 'Комментарий для Bitrix24')
-    window.open(bitrixDealUrl(props.deal.deal_id), '_blank', 'noopener,noreferrer')
+    const url = bitrixDealUrl(props.deal.deal_id)
+    if (url) window.open(url, '_blank', 'noopener,noreferrer')
   }
 
   function complete(entry: ManagerQuickHelpEntry) {
@@ -3156,7 +3153,7 @@ function ManagerAssistantModal(props: {
             </div> : null}
             {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Готовим рекомендацию'}</small></div> : null}
           </section> : null}
-          {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><div><p>{maskDealTitleInText(item.text, props.deal.deal_id, props.deal.title)}</p>{item.kind === 'communication' && item.channel ? <CommunicationContent dealId={props.deal.deal_id} eventId={item.id} channel={item.channel} /> : null}</div></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}
+          {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><div><p>{maskDemoText(item.text, props.deal)}</p>{item.kind === 'communication' && item.channel ? <CommunicationContent dealId={props.deal.deal_id} eventId={item.id} channel={item.channel} /> : null}</div></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}
           {view === 'context' ? <ManagerDealContextView
             deal={props.deal}
             dealId={props.deal.deal_id}
@@ -3170,10 +3167,12 @@ function ManagerAssistantModal(props: {
             userRole={props.userRole}
             onCopy={props.onCopy}
           /> : null}
-          {view === 'followups' ? <section className="dc-manager-followups"><header><div><h3>Фоллоуапы / дожим</h3><p>Идеи полезных касаний по текущей ситуации и DISC-профилю клиента.</p></div><button className="dc-button primary" disabled={Boolean(followupsJob && ['queued', 'running'].includes(followupsJob.status))} onClick={() => void generateFollowups()}>{followups ? 'Открыть актуальные' : 'Сформировать'}</button></header>{followupsJob && ['queued', 'running'].includes(followupsJob.status) ? <ManagerJobProgress job={followupsJob} label="Подготовка фоллоуапов" /> : null}{followupsError ? <p className="dc-manager-error">{followupsError}</p> : null}{followups ? <FollowupsResultView record={maskDealTitleInValue(followups, props.deal.deal_id, props.deal.title)} /> : <p className="empty">Фоллоуапы ещё не сформированы. Запуск создаст 3–5 идей без генерации самих материалов.</p>}</section> : null}
+          {view === 'followups' ? <section className="dc-manager-followups"><header><div><h3>Фоллоуапы / дожим</h3><p>Идеи полезных касаний по текущей ситуации и DISC-профилю клиента.</p></div><button className="dc-button primary" disabled={Boolean(followupsJob && ['queued', 'running'].includes(followupsJob.status))} onClick={() => void generateFollowups()}>{followups ? 'Открыть актуальные' : 'Сформировать'}</button></header>{followupsJob && ['queued', 'running'].includes(followupsJob.status) ? <ManagerJobProgress job={followupsJob} label="Подготовка фоллоуапов" /> : null}{followupsError ? <p className="dc-manager-error">{followupsError}</p> : null}{followups ? <FollowupsResultView record={maskDemoValue(followups, props.deal)} /> : <p className="empty">Фоллоуапы ещё не сформированы. Запуск создаст 3–5 идей без генерации самих материалов.</p>}</section> : null}
           {view === 'companion' ? <CompanionTextPanel
             dealId={props.deal.deal_id}
             dealTitle={props.deal.title}
+            managerId={props.deal.manager_id}
+            managerName={props.deal.manager_name}
             lastContact={companionLastContact}
             companion={companion}
             job={companionJob}
@@ -3242,6 +3241,8 @@ function DealMarkdownReport(props: {
   reportId?: number | null
   dealId?: string | null
   dealTitle?: string | null
+  managerId?: string | null
+  managerName?: string | null
   markdownAvailable?: boolean
   userRole: AuthUser['role']
   onCopy: (text: string, label: string) => Promise<void>
@@ -3265,7 +3266,12 @@ function DealMarkdownReport(props: {
   const canOpenTrace = canSeeTrace && Boolean(reportId)
 
   function visibleText(text: string) {
-    return maskDealTitleInText(text, props.dealId, props.dealTitle)
+    return maskDemoText(text, {
+      deal_id: props.dealId,
+      title: props.dealTitle,
+      manager_id: props.managerId,
+      manager_name: props.managerName,
+    })
   }
 
   useEffect(() => {
@@ -3493,13 +3499,13 @@ function ManagerDealContextView(props: {
   const [priorities, setPriorities] = useState<Record<string, 1 | 2 | 3 | null>>({})
   const [priorityBusy, setPriorityBusy] = useState('')
   const [priorityError, setPriorityError] = useState('')
-  const context = maskDealTitleInValue(props.context, props.dealId, props.deal.title)
+  const context = maskDemoValue(props.context, props.deal)
   const lastCommunication = props.lastCommunication
-    ? { ...props.lastCommunication, text: maskDealTitleInText(props.lastCommunication.text, props.dealId, props.deal.title) }
+    ? { ...props.lastCommunication, text: maskDemoText(props.lastCommunication.text, props.deal) }
     : null
-  const stage = maskDealTitleInText(props.stage, props.dealId, props.deal.title)
-  const currentTask = maskDealTitleInText(props.currentTask, props.dealId, props.deal.title)
-  const mainRisk = maskDealTitleInText(props.mainRisk, props.dealId, props.deal.title)
+  const stage = maskDemoText(props.stage, props.deal)
+  const currentTask = maskDemoText(props.currentTask, props.deal)
+  const mainRisk = maskDemoText(props.mainRisk, props.deal)
 
   useEffect(() => {
     const next: Record<string, 1 | 2 | 3 | null> = {}
@@ -3528,6 +3534,8 @@ function ManagerDealContextView(props: {
       reportId={props.report?.report_id}
       dealId={props.dealId}
       dealTitle={props.deal.title}
+      managerId={props.deal.manager_id}
+      managerName={props.deal.manager_name}
       markdownAvailable={props.report?.markdown_available}
       userRole={props.userRole}
       onCopy={props.onCopy}
@@ -3589,7 +3597,7 @@ function ManagerDealContextView(props: {
       <h4>Карточка сделки</h4>
       <div><small>Название</small><strong>{displayDealTitle(props.dealId, card?.title || props.deal.title, 'Не указано')}</strong></div>
       <div><small>Сумма</small><strong>{amountText}</strong></div>
-      <div><small>Ответственный</small><strong>{contextDisplay(card?.responsible)}</strong></div>
+      <div><small>Ответственный</small><strong>{isDemoMode() ? displayManagerName(props.deal.manager_id, props.deal.manager_name) : contextDisplay(card?.responsible)}</strong></div>
       <div><small>Компания</small><strong>{contextDisplay(card?.company)}</strong></div>
       <div><small>Оборудование</small><strong>{contextDisplay(card?.equipment || equipmentLabels[context.solution_fit?.equipment_type || ''] || context.solution_fit?.equipment_type)}</strong></div>
       <div><small>Срок изготовления</small><strong>{contextDisplay(card?.manufacturing_days)}</strong></div>
@@ -3693,6 +3701,8 @@ function companionContactLabel(contact: ManagerCompanionLastContact | null) {
 function CompanionTextPanel({
   dealId,
   dealTitle,
+  managerId,
+  managerName,
   lastContact,
   companion,
   job,
@@ -3702,6 +3712,8 @@ function CompanionTextPanel({
 }: {
   dealId: string
   dealTitle?: string | null
+  managerId?: string | null
+  managerName?: string | null
   lastContact: ManagerCompanionLastContact | null
   companion: ManagerCompanionRecord | null
   job: ManagerCompanionJob | null
@@ -3710,7 +3722,12 @@ function CompanionTextPanel({
   onCopy: (text: string) => void
 }) {
   const running = Boolean(job && ['queued', 'running'].includes(job.status))
-  const visibleCompanion = maskDealTitleInValue(companion, dealId, dealTitle)
+  const visibleCompanion = maskDemoValue(companion, {
+    deal_id: dealId,
+    title: dealTitle,
+    manager_id: managerId,
+    manager_name: managerName,
+  })
   const message = String(visibleCompanion?.content.message_text || '').trim()
   const missing = !message && (error === 'Нет данных' || visibleCompanion?.content.insufficient_reason)
   return (

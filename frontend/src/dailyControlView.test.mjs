@@ -89,16 +89,19 @@ test('a task moved to tomorrow still belongs to today and search looks inside th
 })
 
 test('DEMO_MODE search finds the display label without changing production matching', () => {
-  const deal = { ...deals[3], title: 'Поставка линии' }
+  const deal = { ...deals[3], title: 'Поставка линии', manager_id: '42', manager_name: 'Иванов Иван' }
   assert.equal(matchesDailySearch(deal, 'сделка 3'), false)
+  assert.equal(matchesDailySearch(deal, 'менеджер 42'), false)
   setDemoMode(true)
   try {
     assert.equal(matchesDailySearch(deal, 'сделка 3'), true)
+    assert.equal(matchesDailySearch(deal, 'менеджер 42'), true)
     assert.equal(matchesDailySearch(deal, 'поставка'), true)
   } finally {
     setDemoMode(false)
   }
   assert.equal(matchesDailySearch(deal, 'сделка 3'), false)
+  assert.equal(matchesDailySearch(deal, 'менеджер 42'), false)
 })
 
 test('untouched obligation stays in the report without a separate badge', () => {

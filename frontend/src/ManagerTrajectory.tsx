@@ -36,7 +36,7 @@ import {
 } from './trajectoryWindow'
 import { copyTextToClipboard } from './contextPersist'
 import { BitrixDealIdLink } from './dealPresentation'
-import { displayEntityTitle, maskDealTitleInText, maskDealTitleInValue } from './demoDisplay'
+import { displayEntityTitle, displayManagerName, maskDemoText, maskDemoValue } from './demoDisplay'
 
 const CATEGORIES: Array<[TrajectoryCategory, string]> = [
   ['all', 'Все события'],
@@ -94,9 +94,19 @@ function maskIfDealText(
   entityType?: string | null,
   entityId?: string | number | null,
   realTitle?: string | null,
+  managerId?: string | number | null,
+  managerName?: string | null,
 ) {
-  if (String(entityType || '').toLowerCase() !== 'deal') return text == null ? '' : String(text)
-  return maskDealTitleInText(text, entityId, realTitle)
+  const source = text == null ? '' : String(text)
+  if (String(entityType || '').toLowerCase() === 'deal') {
+    return maskDemoText(source, {
+      deal_id: entityId,
+      title: realTitle,
+      manager_id: managerId,
+      manager_name: managerName,
+    })
+  }
+  return maskDemoText(source, { manager_id: managerId, manager_name: managerName })
 }
 
 function maskIfDealValue<T>(
@@ -104,9 +114,18 @@ function maskIfDealValue<T>(
   entityType?: string | null,
   entityId?: string | number | null,
   realTitle?: string | null,
+  managerId?: string | number | null,
+  managerName?: string | null,
 ): T {
-  if (String(entityType || '').toLowerCase() !== 'deal') return value
-  return maskDealTitleInValue(value, entityId, realTitle)
+  if (String(entityType || '').toLowerCase() === 'deal') {
+    return maskDemoValue(value, {
+      deal_id: entityId,
+      title: realTitle,
+      manager_id: managerId,
+      manager_name: managerName,
+    })
+  }
+  return maskDemoValue(value, { manager_id: managerId, manager_name: managerName })
 }
 
 function eventIcon(event: TrajectoryEvent) {
@@ -184,7 +203,7 @@ export function ManagerTrajectory() {
       if (cancelled) return
       setDay(result)
       if (!managerId) {
-        setManagerOptions(result.managers.map((manager) => [manager.manager_id, manager.manager_name]))
+        setManagerOptions(result.managers.map((manager) => [manager.manager_id, displayManagerName(manager.manager_id, manager.manager_name)]))
       }
       setExpanded((current) => current.size ? current : new Set(result.managers[0] ? [result.managers[0].manager_id] : []))
     }).catch((reason) => {
@@ -336,7 +355,7 @@ export function ManagerTrajectory() {
             <div className="trajectory-manager-main">
               <button className="trajectory-manager-title" type="button" onClick={() => toggleManager(manager.manager_id)} aria-expanded={isExpanded}>
                 <span>{isExpanded ? '⌃' : '⌄'}</span>
-                <div><strong>{manager.manager_name}</strong><small>{manager.totals.events} событий · {manager.totals.deals} сделок · {manager.totals.leads} лидов · {manager.totals.tasks} задач · {manager.totals.communications} коммуникаций · {manager.totals.crm} CRM · {manager.totals.neurorop} НейроРОП</small><span className="trajectory-manager-call-summary">☎ {callSummaryLabel(manager)}</span></div>
+                <div><strong>{displayManagerName(manager.manager_id, manager.manager_name)}</strong><small>{manager.totals.events} событий · {manager.totals.deals} сделок · {manager.totals.leads} лидов · {manager.totals.tasks} задач · {manager.totals.communications} коммуникаций · {manager.totals.crm} CRM · {manager.totals.neurorop} НейроРОП</small><span className="trajectory-manager-call-summary">☎ {callSummaryLabel(manager)}</span></div>
               </button>
               <div className="trajectory-density-grid">
                 {day.axis.slots.map((slot) => {
@@ -346,7 +365,7 @@ export function ManagerTrajectory() {
                     key={slot.from}
                     className={`trajectory-density ${bucket?.density || 'none'}`}
                     title={bucket ? `${slot.label}: ${bucket.count} событий` : `${slot.label}: наблюдаемой активности в Bitrix нет`}
-                    aria-label={bucket ? `${manager.manager_name}, ${slot.label}, ${bucket.count} событий` : `${manager.manager_name}, ${slot.label}, наблюдаемой активности в Bitrix нет`}
+                    aria-label={bucket ? `${displayManagerName(manager.manager_id, manager.manager_name)}, ${slot.label}, ${bucket.count} событий` : `${displayManagerName(manager.manager_id, manager.manager_name)}, ${slot.label}, наблюдаемой активности в Bitrix нет`}
                     disabled={!bucket?.count}
                     onClick={() => bucket && void openWindow(manager, bucket)}
                   ><span>{bucket?.count || ''}</span></button>
@@ -386,7 +405,7 @@ export function ManagerTrajectory() {
     {(windowData || drawerLoading) ? <aside className="trajectory-drawer" aria-label="События интервала">
       <div className="trajectory-drawer-head">
         <div>
-          {entity ? <TrajectoryDrawerEntityMark entity={entity} /> : <small>{windowData?.manager_name || 'Интервал'}</small>}
+          {entity ? <TrajectoryDrawerEntityMark entity={entity} /> : <small>{windowData ? displayManagerName(windowData.manager_id, windowData.manager_name, 'Интервал') : 'Интервал'}</small>}
           <h2>{entity ? visibleTrajectoryEntityTitle(entity) || intervalHeading(windowData) : intervalHeading(windowData)}</h2>
         </div>
         <button type="button" onClick={() => entity ? setEntity(null) : setWindowData(null)} aria-label={entity ? 'Назад к событиям' : 'Закрыть'}>{entity ? '←' : '×'}</button>
@@ -429,7 +448,7 @@ function WindowEventList({
       windowExportFilename(windowData.manager_id, windowData.period.from, windowData.period.to),
       buildWindowExport({
         manager_id: windowData.manager_id,
-        manager_name: windowData.manager_name,
+        manager_name: displayManagerName(windowData.manager_id, windowData.manager_name),
         period: windowData.period,
         categories: selected,
         q: query,
@@ -468,6 +487,7 @@ function WindowEventList({
     {visibleEvents.map((event, index) => <TrajectoryEventRow
       event={event}
       managerId={windowData.manager_id}
+      managerName={windowData.manager_name}
       date={date}
       onOpenEntity={onOpenEntity}
       key={`${event.event_id}-${index}`}
@@ -496,12 +516,14 @@ function directionLabel(direction?: string | null) {
 function TrajectoryEventRow({
   event,
   managerId,
+  managerName,
   date,
   onOpenEntity,
   entityContext = false,
 }: {
   event: TrajectoryEvent
   managerId: string
+  managerName?: string | null
   date: string
   onOpenEntity?: (event: TrajectoryEvent) => Promise<void>
   entityContext?: boolean
@@ -515,7 +537,7 @@ function TrajectoryEventRow({
   const summary = isCall
     ? `${directionLabel(event.direction)} · ${durationLabel(event.duration_seconds)}`
     : entityContext
-      ? maskIfDealText(event.subject || event.description || 'Без краткого описания', event.entity_type, event.entity_id, event.entity_title)
+      ? maskIfDealText(event.subject || event.description || 'Без краткого описания', event.entity_type, event.entity_id, event.entity_title, managerId, managerName)
       : displayEntityTitle(event.entity_type, event.entity_id, event.entity_title, '') || event.subject || event.description || 'Без краткого описания'
 
   async function toggle() {
@@ -551,11 +573,11 @@ function TrajectoryEventRow({
       {error ? <p className="error">{error}</p> : null}
       {detail ? <>
         {isCall ? <div className="trajectory-call-facts"><span><small>Направление</small><b>{directionLabel(detail.direction)}</b></span><span><small>Длительность</small><b>{durationLabel(detail.duration_seconds)}</b></span></div> : null}
-        {detail.subject && !detail.quick_help_view ? <p><b>{maskIfDealText(detail.subject, event.entity_type, event.entity_id, event.entity_title)}</b></p> : null}
-        {detail.description ? <p className="trajectory-full-event-text">{maskIfDealText(detail.description, event.entity_type, event.entity_id, event.entity_title)}</p> : null}
-        {detail.details?.length ? <dl className="trajectory-event-facts">{detail.details.map((item, index) => <div key={`${item.label}-${index}`}><dt>{item.label}</dt><dd>{maskIfDealText(item.value, event.entity_type, event.entity_id, event.entity_title)}</dd></div>)}</dl> : null}
-        {detail.transcript_text ? <details className="trajectory-transcript"><summary>Расшифровка звонка</summary><pre>{maskIfDealText(detail.transcript_text, event.entity_type, event.entity_id, event.entity_title)}</pre>{detail.transcript_truncated ? <small>Показан первый 1 000 000 символов.</small> : null}</details> : null}
-        {detail.quick_help_view ? <TrajectoryQuickHelpDetail view={maskIfDealValue(detail.quick_help_view, event.entity_type, event.entity_id, event.entity_title)} /> : null}
+        {detail.subject && !detail.quick_help_view ? <p><b>{maskIfDealText(detail.subject, event.entity_type, event.entity_id, event.entity_title, managerId, managerName)}</b></p> : null}
+        {detail.description ? <p className="trajectory-full-event-text">{maskIfDealText(detail.description, event.entity_type, event.entity_id, event.entity_title, managerId, managerName)}</p> : null}
+        {detail.details?.length ? <dl className="trajectory-event-facts">{detail.details.map((item, index) => <div key={`${item.label}-${index}`}><dt>{item.label}</dt><dd>{maskIfDealText(item.value, event.entity_type, event.entity_id, event.entity_title, managerId, managerName)}</dd></div>)}</dl> : null}
+        {detail.transcript_text ? <details className="trajectory-transcript"><summary>Расшифровка звонка</summary><pre>{maskIfDealText(detail.transcript_text, event.entity_type, event.entity_id, event.entity_title, managerId, managerName)}</pre>{detail.transcript_truncated ? <small>Показан первый 1 000 000 символов.</small> : null}</details> : null}
+        {detail.quick_help_view ? <TrajectoryQuickHelpDetail view={maskIfDealValue(detail.quick_help_view, event.entity_type, event.entity_id, event.entity_title, managerId, managerName)} /> : null}
         {!entityContext && event.entity_id && onOpenEntity ? <button type="button" className="trajectory-open-entity" onClick={() => void onOpenEntity(event)}>Открыть {event.entity_type?.toUpperCase()} #{event.entity_id}</button> : null}
       </> : null}
     </div> : null}
@@ -724,9 +746,9 @@ function EntityDetail({ entity, date }: { entity: TrajectoryEntity; date: string
     <div className="trajectory-entity-meta">
       <span><small>Воронка</small><b>{entity.pipeline_name || entity.pipeline_id || '—'}</b></span>
       <span><small>Текущая стадия</small><b>{entity.stage_name || entity.stage_id || '—'}</b></span>
-      <span><small>Ответственный</small><b>{entity.manager_name || `#${entity.manager_id}`}</b></span>
+      <span><small>Ответственный</small><b>{displayManagerName(entity.manager_id, entity.manager_name, entity.manager_id ? `#${entity.manager_id}` : '—')}</b></span>
     </div>
-    {fields.length ? <details><summary>Актуальные CRM-поля ({fields.length})</summary><dl>{fields.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{typeof value === 'object' ? JSON.stringify(maskIfDealValue(value, entity.entity_type, entity.entity_id, entity.title)) : maskIfDealText(String(value), entity.entity_type, entity.entity_id, entity.title)}</dd></div>)}</dl></details> : null}
+    {fields.length ? <details><summary>Актуальные CRM-поля ({fields.length})</summary><dl>{fields.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{typeof value === 'object' ? JSON.stringify(maskIfDealValue(value, entity.entity_type, entity.entity_id, entity.title, entity.manager_id, entity.manager_name)) : maskIfDealText(String(value), entity.entity_type, entity.entity_id, entity.title, entity.manager_id, entity.manager_name)}</dd></div>)}</dl></details> : null}
     <h3>Хронология дня</h3>
     {entity.created_at ? <div className="trajectory-entity-created">
       <time>{formatMoscowDateTime(entity.created_at, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</time>
@@ -736,6 +758,7 @@ function EntityDetail({ entity, date }: { entity: TrajectoryEntity; date: string
       {entity.chronology.map((event, index) => <TrajectoryEventRow
         event={event}
         managerId={entity.manager_id || ''}
+        managerName={entity.manager_name}
         date={date}
         entityContext
         key={`${event.event_id}-${index}`}

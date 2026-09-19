@@ -15,9 +15,9 @@ import {
 import { copyTextToClipboard } from './contextPersist'
 import { formatMoscowDateTime } from './dateTime'
 import { DailyIcon, DealReviewCard } from './DealReviewCard'
-import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
-import { displayDealTitle, maskDealTitleInText } from './demoDisplay'
-import { DealStatusIndicator } from './dealPresentation'
+import { formatDealPipelineStage } from './dealDisplay'
+import { displayDealTitle, displayManagerName, maskDemoText } from './demoDisplay'
+import { BitrixDealLink, DealStatusIndicator } from './dealPresentation'
 import { businessReportWarnings, dailyTaskTotals, firstUnreviewedDeal, matchesDailySearch, hasReportDayWork, reportDayLabels, reportHeading, shouldOpenLatestReport, snapshotDayText, sortDailyReviewDeals } from './dailyControlView'
 import { TaskDayResults } from './TaskDayResults'
 
@@ -464,7 +464,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
 
   async function copyScript() {
     if (!selectedDeal) return
-    const script = maskDealTitleInText(String(selectedDeal.ai_context.manager_coaching || '').trim(), selectedDeal.deal_id, selectedDeal.title)
+    const script = maskDemoText(String(selectedDeal.ai_context.manager_coaching || '').trim(), selectedDeal)
     if (!script) return
     const copied = await copyTextToClipboard(script)
     setCopyNotice(copied ? 'Сценарий скопирован' : 'Скопировать не удалось — выделите текст вручную')
@@ -581,7 +581,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
                 aria-selected={selected}
                 onClick={() => selectManager(manager)}
               >
-                <strong>{manager.manager_name}</strong>
+                <strong>{displayManagerName(manager.manager_id, manager.manager_name)}</strong>
                 <small>{manager.deals_count} сделок · {manager.calls} звонков · {manager.messages} сообщений · {talkDuration(manager.talk_seconds)}</small>
                 <em aria-label={`${manager.red} срочно, ${manager.yellow} проверить, ${manager.green} в норме`}>
                   <i className="red" aria-hidden="true" />{manager.red} срочно
@@ -604,7 +604,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
             <header>
               <div>
                 <div className="dc-daily-list-head-row">
-                  <h2>{selectedManager?.manager_name || 'Сделки отчёта'}</h2>
+                  <h2>{selectedManager ? displayManagerName(selectedManager.manager_id, selectedManager.manager_name) : 'Сделки отчёта'}</h2>
                   <input
                     className="dc-daily-search"
                     type="search"
@@ -747,10 +747,10 @@ function DealRow({
         {dayLabels.length ? <div className="dc-daily-day-labels" aria-label="Почему сделка в отчёте и какая работа зафиксирована">
           {dayLabels.map((item) => <span className={item.kind} key={item.text}>{item.text}</span>)}
         </div> : null}
-        <p className={selected ? 'full' : 'clamp'}>{maskDealTitleInText(snapshotDayText(deal.attention_reason), deal.deal_id, deal.title)}</p>
+        <p className={selected ? 'full' : 'clamp'}>{maskDemoText(snapshotDayText(deal.attention_reason), deal)}</p>
         <footer>
           <span>{communications.unavailable ? 'Коммуникации недоступны' : `${communications.calls} звонков · ${communications.messages} сообщений за день среза${communications.conversation_duration_seconds != null ? ` · ${talkTime(communications.conversation_duration_seconds)} разговоров` : ''}`}</span>
-          <a href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>Сделка #{deal.deal_id}</a>
+          <BitrixDealLink dealId={deal.deal_id}>Сделка #{deal.deal_id}</BitrixDealLink>
         </footer>
         <TaskDayResults tasks={deal.task_results} cutoffAt={cutoffAt || deal.day_scope?.cutoff_at} />
       </div>

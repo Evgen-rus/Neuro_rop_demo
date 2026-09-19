@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react'
+
 import type { DailyControlStatus } from './api'
 import { bitrixDealUrl } from './dealDisplay'
 
@@ -8,20 +10,37 @@ const STATUS_SYMBOL: Record<DailyControlStatus, string> = {
   neutral: '–',
 }
 
-export function BitrixDealIdLink({ dealId }: { dealId: string }) {
+export function BitrixDealLink({
+  dealId,
+  className,
+  children,
+}: {
+  dealId: string
+  className?: string
+  children?: ReactNode
+}) {
+  const url = bitrixDealUrl(dealId)
+  const content = children ?? `#${dealId}`
+  if (!url) {
+    return <span className={className}>{content}</span>
+  }
   return (
     <a
-      className="dc-deal-id"
-      href={bitrixDealUrl(dealId)}
+      className={className}
+      href={url}
       target="_blank"
       rel="noreferrer"
       aria-label={`Открыть сделку #${dealId} в Bitrix`}
       title="Открыть в Bitrix"
       onClick={(event) => event.stopPropagation()}
     >
-      #{dealId}
+      {content}
     </a>
   )
+}
+
+export function BitrixDealIdLink({ dealId }: { dealId: string }) {
+  return <BitrixDealLink className="dc-deal-id" dealId={dealId}>#{dealId}</BitrixDealLink>
 }
 
 export function DealStatusIndicator(props: {

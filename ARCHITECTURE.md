@@ -1,8 +1,8 @@
-# Архитектура Neuro ROP Assistant
+# Архитектура Neuro ROP Demo
 
 ## Назначение и статус
 
-ROP Assistant помогает руководителю продаж разбирать лиды и сделки Bitrix24: собирает доступный CRM-контекст, при необходимости локально транскрибирует записи, строит валидированный LLM-анализ и показывает его в UI. Пилот поддерживает пользователей `admin`/`rop`/`manager`, серверные SQLite-сессии и ограничение сделок по роли; временная VPS-публикация дополнительно остаётся за Nginx Basic Auth.
+Этот репозиторий — **демо-версия Neuro ROP** (НейроРОП демо), а не production-продукт. На стенде тот же помощник руководителя продаж разбирает лиды и сделки Bitrix24 по локальному snapshot: собирает доступный CRM-контекст, при необходимости локально транскрибирует записи, строит валидированный LLM-анализ и показывает его в UI. Как включить демо-режим — `Docs/demo_mode.md`. Демо поддерживает пользователей `admin`/`rop`/`manager`, серверные SQLite-сессии и ограничение сделок по роли; временная VPS-публикация дополнительно остаётся за Nginx Basic Auth.
 
 Документ — рабочая карта для агента, а не runbook и не API-справочник. Перед изменением прочитай разделы **Source of Truth**, **Critical Invariants** и соответствующую строку в **Where to change code**. Если документ расходится с кодом или конфигурацией, верен код; исправь карту только при изменении архитектурного факта.
 
@@ -49,7 +49,7 @@ ROP Assistant помогает руководителю продаж разби�
 - Подготовка canonical state и evidence coverage для deal — обязательный preflight: её ошибка останавливает запуск до платного LLM-вызова, потому что такой результат нельзя опубликовать как trusted baseline.
 - Все бизнес-даты и сроки рассчитываются и отображаются в `Europe/Moscow`; локальная временная зона браузера или машины не должна менять день, срок или сортировку. При `DEMO_MODE=true` бизнес-`now` берётся из `DEMO_NOW` через `app_clock.app_now()` / `frontend/src/dateTime.ts`; сохранённые даты snapshot не переписываются.
 - При `DEMO_MODE=true` внешний HTTP в Bitrix fail-closed блокируется в `BitrixReadOnlyClient.call` и в скачивании аудио до сети; scheduler/CRM-цикл не стартует. OpenAI/OpenRouter не блокируются. При `DEMO_MODE=false` поведение production не меняется.
-- При `DEMO_MODE=true` UI скрывает сохранённый `deal.title` только на отображении: показывается `Сделка {deal_id}`. SQLite, snapshot, файлы отчётов и живой LLM-контекст не переписываются; при `DEMO_MODE=false` названия остаются как в CRM.
+- При `DEMO_MODE=true` UI скрывает сохранённый `deal.title` и `manager_name` только на отображении: показывается `Сделка {deal_id}` и `Менеджер {manager_id}`. Номер сделки остаётся видимым, но frontend не строит и не открывает URL карточки Bitrix. SQLite, snapshot, файлы отчётов и живой LLM-контекст не переписываются; при `DEMO_MODE=false` названия остаются как в CRM, а ссылки на карточку снова работают.
 - Lead с подтверждённой конверсией переводится в deal-flow. Отсутствующий `CONTACT_ID` не доказывает отсутствие связанной сделки.
 - CRM-запись о звонке, `COMPLETED=Y` или внутренний комментарий сами по себе не доказывают содержательный контакт с клиентом. Для лида это требует подходящего transcript/contact evidence; попытки, подтверждённый контакт и внутреннюю информацию хранить раздельно.
 - `deal_control_brief.current_situation` строится от последнего подтверждённого содержательного контакта клиента по всей доступной истории сделки, а не от последней CRM-активности менеджера. Исходящее сообщение, недозвон, задача и комментарий менеджера после этого контакта — только действия; они не заменяют клиентскую позицию. Якорь определяется из raw/evidence слоя до compact-history limit.
@@ -149,7 +149,7 @@ Evidence identity идентифицирует звонки, входящие em
 | Задача | Первое место для проверки | Затронуть также, если меняется контракт |
 | --- | --- | --- |
 | Bitrix REST, pagination, retry | `bitrix/client.py` | callers и tests внешнего API; demo guard — `assert_bitrix_http_allowed`, аудио — `bitrix/deals/download_deals_call_audio.py` |
-| DEMO_MODE, заморозка бизнес-времени, demo SQLite path, маскировка названий сделок в UI | `app_clock.py`, `Docs/demo_mode.md`, `frontend/src/demoDisplay.ts` | `bitrix/client.py`, `api/daytime_cycle.py`, `api/deal_control.py`, `api/app.py` (`/api/runtime`), `frontend/src/dateTime.ts`, `frontend/src/main.tsx` |
+| DEMO_MODE, заморозка бизнес-времени, demo SQLite path, маскировка названий сделок в UI | `app_clock.py`, `Docs/demo_mode.md`, `frontend/src/demoDisplay.ts`, `frontend/src/dealDisplay.ts` | `bitrix/client.py`, `api/daytime_cycle.py`, `api/deal_control.py`, `api/app.py` (`/api/runtime`), `frontend/src/dateTime.ts`, `frontend/src/dealPresentation.tsx`, `frontend/src/main.tsx` |
 | Customer history, связанная сущность, контакт/внутренний контекст | `bitrix/customer_history.py` | конкретный lead/deal builder, diagnostics и UI metadata |
 | Workspace, raw context или audio manifest | соответствующий `bitrix/leads/*` или `bitrix/deals/*`, `bitrix/workspace.py` | `run_rop_assistant.py` только при изменении orchestration |
 | История стадий, открытые задачи, чаты задач или технические поля в полном deal-анализе | `bitrix/deals/1_fetch_deals_context.py`, `bitrix/deals/4_build_deals_llm_context.py` | `openai_api/llm/analyze_deal.py` и deal tests |

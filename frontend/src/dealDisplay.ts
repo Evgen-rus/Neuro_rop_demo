@@ -1,3 +1,5 @@
+import { isDemoMode } from './demoDisplay.ts'
+
 const BITRIX_DEAL_BASE_URL = 'https://obtorg.bitrix24.ru/crm/deal/details'
 
 type DealStage = {
@@ -16,5 +18,8 @@ export function formatDealPipelineStage(deal: DealStage) {
 }
 
 export function bitrixDealUrl(dealId: string) {
-  return `${BITRIX_DEAL_BASE_URL}/${encodeURIComponent(dealId)}/`
+  if (isDemoMode()) return ''
+  const id = String(dealId || '').trim()
+  if (!id) return ''
+  return `${BITRIX_DEAL_BASE_URL}/${encodeURIComponent(id)}/`
 }
