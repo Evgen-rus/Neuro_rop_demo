@@ -1,4 +1,13 @@
-# Временный защищённый стенд
+# Deployment
+
+Постоянный demo-стенд `demo-neurorop.leadrecordwh.ru` обновляется вручную через
+`demo-vps.sh`. Пошаговая инструкция: [`Docs/demo_vps_runbook.md`](../Docs/demo_vps_runbook.md).
+Cloudflare в этой схеме не используется.
+
+Ниже сохранена инструкция старого временного Cloudflare-стенда. Скрипт
+`temporary-tunnel.sh` не используется для постоянного demo-домена.
+
+## Временный защищённый стенд
 
 Скрипт `temporary-tunnel.sh` запускает три изолированных контейнера:
 
